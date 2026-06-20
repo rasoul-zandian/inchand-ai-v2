@@ -73,6 +73,10 @@ def _build_result(
     )
 
 
+def _has_contract_reference(text: str) -> bool:
+    return "قرارداد" in text or "قرار داد" in text
+
+
 def classify_intent_with_rules(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
@@ -82,7 +86,9 @@ def classify_intent_with_rules(
     settlement_context = _has_any(combined, _SETTLEMENT_MARKERS)
     context_flags = ["settlement_context"] if settlement_context else []
 
-    if "قرارداد" in text and _has_any(text, ("تایید", "شبا", "iban")):
+    if _has_contract_reference(combined) and _has_any(
+        combined, ("تایید", "شبا", "iban")
+    ):
         return _build_result(
             IntentId.CONTRACT_APPROVAL,
             0.85,
