@@ -1,4 +1,7 @@
-from app.intent.classifier import classify_intent
+import json
+
+from app.config import settings
+from app.intent.classifier import classify_intent, classify_intent_with_rules
 from app.intent.taxonomy import IntentId
 from app.models.intent import SuggestedAction
 
@@ -49,3 +52,95 @@ def test_contract_approval_after_iban_submission() -> None:
 
     assert result.primary_intent == IntentId.CONTRACT_APPROVAL
     assert result.suggested_action == SuggestedAction.HUMAN_FOLLOWUP
+
+
+def test_provider_rule_uses_rule_classifier(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "intent_classifier_provider", "rule")
+
+    result = classify_intent("تسویه این هفته کی واریز میشه؟")
+
+    assert result.primary_intent == IntentId.SETTLEMENT_INQUIRY
+    assert result.fallback_reason is None
+
+
+def test_provider_openai_returns_structured_classification(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "intent_classifier_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+
+    llm_payload = {
+        "primary_intent": "product_approval_request",
+        "confidence": 0.92,
+        "evidence": ["محصول جدید", "تایید کنید"],
+        "entities": {},
+        "context_flags": [],
+        "negative_intents": [],
+        "suggested_action": "human_followup",
+    }
+
+    def fake_request(_api_key, _model, _temperature, _messages):
+        return json.dumps(llm_payload)
+
+    monkeypatch.setattr(
+        "app.intent.llm_classifier._default_request_openai",
+        fake_request,
+    )
+
+    result = classify_intent("لطفا محصول جدیدم رو تایید کنید")
+
+    assert result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
+    assert result.confidence == 0.92
+    assert result.evidence == ["محصول جدید", "تایید کنید"]
+    assert result.suggested_action == SuggestedAction.HUMAN_FOLLOWUP
+    assert result.fallback_reason is None
+
+
+def test_invalid_llm_intent_falls_back_to_rule_classifier(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "intent_classifier_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+
+    def fake_request(_api_key, _model, _temperature, _messages):
+        return json.dumps({"primary_intent": "made_up_intent", "confidence": 0.9})
+
+    monkeypatch.setattr(
+        "app.intent.llm_classifier._default_request_openai",
+        fake_request,
+    )
+
+    message = "وقتی سفارش رو ثبت میکنم خطا میده و ثبت نمیشه"
+    expected = classify_intent_with_rules(message)
+
+    result = classify_intent(message)
+
+    assert result.primary_intent == expected.primary_intent
+    assert result.fallback_reason == "unknown_intent"
+
+
+def test_openai_settlement_bank_change_not_settlement_inquiry(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "intent_classifier_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+
+    llm_payload = {
+        "primary_intent": "bank_account_change",
+        "confidence": 0.91,
+        "evidence": ["تسویه", "شبا"],
+        "entities": {},
+        "context_flags": ["settlement_context"],
+        "negative_intents": ["settlement_inquiry"],
+        "suggested_action": "request_missing_information",
+    }
+
+    def fake_request(_api_key, _model, _temperature, _messages):
+        return json.dumps(llm_payload)
+
+    monkeypatch.setattr(
+        "app.intent.llm_classifier._default_request_openai",
+        fake_request,
+    )
+
+    result = classify_intent("برای تسویه حساب باید شبا رو عوض کنم")
+
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+    assert result.primary_intent != IntentId.SETTLEMENT_INQUIRY
+    assert "settlement_context" in result.context_flags
+    assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
+    assert result.fallback_reason is None

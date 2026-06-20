@@ -21,3 +21,4 @@ class IntentClassificationResult(BaseModel):
     context_flags: list[str] = Field(default_factory=list)
     negative_intents: list[IntentId] = Field(default_factory=list)
     suggested_action: SuggestedAction
+    fallback_reason: str | None = None

@@ -1,5 +1,7 @@
-"""Placeholder intent classifier (rule-backed until LLM integration)."""
+"""Intent classifier with rule-backed default and optional OpenAI provider."""
 
+from app.config import settings
+from app.intent.llm_classifier import try_classify_intent_with_openai
 from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
 from app.models.messages import ConversationMessage
@@ -57,6 +59,7 @@ def _build_result(
     negative_intents: list[IntentId] | None = None,
     entities: dict[str, str] | None = None,
     suggested_action: SuggestedAction | None = None,
+    fallback_reason: str | None = None,
 ) -> IntentClassificationResult:
     return IntentClassificationResult(
         primary_intent=primary_intent,
@@ -66,10 +69,11 @@ def _build_result(
         context_flags=context_flags or [],
         negative_intents=negative_intents or [],
         suggested_action=suggested_action or _DEFAULT_ACTIONS[primary_intent],
+        fallback_reason=fallback_reason,
     )
 
 
-def classify_intent(
+def classify_intent_with_rules(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
 ) -> IntentClassificationResult:
@@ -242,3 +246,21 @@ def classify_intent(
         ["fallback"],
         context_flags=context_flags,
     )
+
+
+def classify_intent(
+    message: str,
+    conversation_context: list[ConversationMessage] | None = None,
+) -> IntentClassificationResult:
+    if settings.intent_classifier_provider == "openai":
+        llm_result, fallback_reason = try_classify_intent_with_openai(
+            message,
+            conversation_context,
+        )
+        if llm_result is not None:
+            return llm_result
+
+        rule_result = classify_intent_with_rules(message, conversation_context)
+        return rule_result.model_copy(update={"fallback_reason": fallback_reason})
+
+    return classify_intent_with_rules(message, conversation_context)
