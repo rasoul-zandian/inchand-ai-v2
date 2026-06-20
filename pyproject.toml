@@ -1,0 +1,17 @@
+[project]
+name = "inchand-ai-v2"
+version = "0.1.0"
+description = "Inchand AI V2 — LLM-first intent and reply flow"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+pythonpath = ["."]

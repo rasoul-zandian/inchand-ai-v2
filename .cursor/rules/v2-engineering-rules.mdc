@@ -1,0 +1,10 @@
+---
+description: V2 engineering constraints
+alwaysApply: true
+---
+
+- Keep the project minimal and LLM-first.
+- Do not add tools, dashboard, delivery, RAG, LangGraph, or database unless requested.
+- Prefer surgical changes; read only files directly related to the task.
+- One focused regression test per bug; do not run the full suite unless requested.
+- README stays under 10 lines; no changelogs or architecture docs.
