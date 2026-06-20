@@ -6,6 +6,71 @@ from app.intent.taxonomy import IntentId
 from app.models.intent import SuggestedAction
 
 
+from app.models.messages import ConversationMessage
+
+
+def test_unknown_negative_intents_are_skipped_not_fatal(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "intent_classifier_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+
+    llm_payload = {
+        "primary_intent": "product_approval_request",
+        "confidence": 0.9,
+        "evidence": ["تایید"],
+        "entities": {},
+        "context_flags": [],
+        "negative_intents": ["settlement_inquiry", "made_up_intent"],
+        "suggested_action": "human_followup",
+    }
+
+    def fake_request(_api_key, _model, _temperature, _messages):
+        return json.dumps(llm_payload)
+
+    monkeypatch.setattr(
+        "app.intent.llm_classifier._default_request_openai",
+        fake_request,
+    )
+
+    result = classify_intent("لطفا محصول جدیدم رو تایید کنید")
+
+    assert result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
+    assert result.fallback_reason is None
+    assert result.negative_intents == [IntentId.SETTLEMENT_INQUIRY]
+
+
+def test_bank_and_card_with_settlement_prefers_bank_account_change() -> None:
+    message = (
+        "سلام به دلیل اختلال در بانک ملی برای تسویه حساب می خوام کارت جدید "
+        "معرفی کنم. شماره کارت: 5859471022669687 شماره شبا: 790780202010020000219015"
+    )
+    result = classify_intent(message)
+
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+    assert "settlement_context" in result.context_flags
+    assert "card_provided" in result.context_flags
+    assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
+
+
+def test_complaint_context_with_seller_followup() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content=(
+                "فروشنده گرامی در مورد سفارش INC-7342409 شکایتی از فروشگاه شما ثبت شده است."
+            ),
+        ),
+    ]
+    message = (
+        "تماس گرفته شد، قرار شد کالا برگشت داده شود و هزینه به حسابشون برگشت داده بشه"
+    )
+
+    result = classify_intent(message, conversation_context=context)
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+    assert result.primary_intent != IntentId.BANK_ACCOUNT_CHANGE
+    assert result.primary_intent != IntentId.RETURN_REFUND_INQUIRY
+
+
 def test_bank_change_with_settlement_not_settlement_inquiry() -> None:
     result = classify_intent("برای تسویه حساب باید شبا رو عوض کنم")
 

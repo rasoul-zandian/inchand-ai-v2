@@ -98,14 +98,6 @@ REAL_TICKET_CASES: list[RealTicketCase] = [
                 ),
             ),
         ],
-        expected_intent=IntentId.RETURN_REFUND_INQUIRY,
-        accepted_intents=(
-            IntentId.RETURN_REFUND_INQUIRY,
-            IntentId.ORDER_STATUS_INQUIRY,
-        ),
-        taxonomy_gap_note=(
-            "Taxonomy gap: complaint_order_followup may be needed for "
-            "buyer-complaint resolution threads."
-        ),
+        expected_intent=IntentId.COMPLAINT_ORDER_FOLLOWUP,
     ),
 ]

@@ -8,39 +8,15 @@ import urllib.request
 from typing import Callable
 
 from app.config import settings
-from app.intent.taxonomy import INTENT_TAXONOMY, IntentId
+from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
 from app.models.messages import ConversationMessage
+from app.prompts.intent_system_prompt import INTENT_SYSTEM_PROMPT
 
 RequestFn = Callable[[str, str, float, list[dict[str, str]]], str]
 
 _VALID_INTENTS = {intent.value for intent in IntentId}
 _VALID_ACTIONS = {action.value for action in SuggestedAction}
-
-
-def _build_system_prompt() -> str:
-    intent_lines = []
-    for item in INTENT_TAXONOMY:
-        intent_lines.append(f"- {item.id.value}: {item.description}")
-        if item.examples:
-            intent_lines.append(f"  Example: {item.examples[0]}")
-
-    return (
-        "Classify the seller message into exactly one primary_intent from the taxonomy.\n"
-        "Return JSON only with keys: primary_intent, confidence, evidence, entities, "
-        "context_flags, negative_intents, suggested_action.\n"
-        "Rules:\n"
-        "- primary_intent must be one of the taxonomy ids.\n"
-        "- evidence must be short quoted phrases from the seller message or context.\n"
-        "- do not include chain-of-thought or reasoning text.\n"
-        "- if settlement is mentioned while changing bank/card/IBAN, use bank_account_change "
-        "or card_change_request (not settlement_inquiry) and set context_flags to include "
-        "settlement_context; add settlement_inquiry to negative_intents.\n"
-        "- suggested_action must be one of: reply_to_seller, request_missing_information, "
-        "human_followup, escalate, close_request.\n\n"
-        "Taxonomy:\n"
-        + "\n".join(intent_lines)
-    )
 
 
 def _build_user_prompt(
@@ -101,9 +77,8 @@ def _parse_llm_payload(raw: object) -> IntentClassificationResult:
 
     negative_intents: list[IntentId] = []
     for item in negative_raw:
-        if item not in _VALID_INTENTS:
-            raise ValueError("unknown_negative_intent")
-        negative_intents.append(IntentId(item))
+        if isinstance(item, str) and item in _VALID_INTENTS:
+            negative_intents.append(IntentId(item))
 
     evidence = raw.get("evidence", [])
     if not isinstance(evidence, list) or not all(isinstance(x, str) for x in evidence):
@@ -145,7 +120,7 @@ def try_classify_intent_with_openai(
 
     caller = request_fn or _default_request_openai
     messages = [
-        {"role": "system", "content": _build_system_prompt()},
+        {"role": "system", "content": INTENT_SYSTEM_PROMPT},
         {"role": "user", "content": _build_user_prompt(message, conversation_context)},
     ]
 

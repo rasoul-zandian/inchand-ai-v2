@@ -23,6 +23,7 @@ class IntentId(str, Enum):
     COMMISSION_INQUIRY = "commission_inquiry"
     SHIPPING_INQUIRY = "shipping_inquiry"
     RETURN_REFUND_INQUIRY = "return_refund_inquiry"
+    COMPLAINT_ORDER_FOLLOWUP = "complaint_order_followup"
     TECHNICAL_BUG_REPORT = "technical_bug_report"
     GENERAL_INQUIRY = "general_inquiry"
 
@@ -136,6 +137,17 @@ INTENT_TAXONOMY: list[IntentDefinition] = [
         label="Return refund inquiry",
         description="Merchant asks about returns or refunds.",
         examples=["مرجوعی مشتری رو چطور ثبت کنم؟"],
+    ),
+    IntentDefinition(
+        id=IntentId.COMPLAINT_ORDER_FOLLOWUP,
+        label="Complaint order followup",
+        description=(
+            "Seller responds to an admin complaint about an order and reports "
+            "contact, return, refund, replacement, or resolution."
+        ),
+        examples=[
+            "تماس گرفته شد، قرار شد کالا برگشت داده شود و هزینه برگشت داده شود"
+        ],
     ),
     IntentDefinition(
         id=IntentId.TECHNICAL_BUG_REPORT,

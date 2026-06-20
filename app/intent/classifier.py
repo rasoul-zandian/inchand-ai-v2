@@ -11,6 +11,9 @@ _BANK_MARKERS = ("شبا", "حساب", "بانک", "iban")
 _CARD_MARKERS = ("کارت", "card")
 _ORDER_MARKERS = ("سفارش", "order")
 _PRODUCT_MARKERS = ("محصول", "product")
+_COMPLAINT_CONTEXT_MARKERS = ("شکایت", "complaint")
+_COMPLAINT_RESOLUTION_MARKERS = ("تماس", "برگشت", "قرار شد", "جایگزین", "refund", "return")
+_BUYER_REFUND_PHRASES = ("حسابشون", "حساب مشتری", "به حسابش")
 
 _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
     IntentId.ORDER_REGISTRATION_ISSUE: SuggestedAction.ESCALATE,
@@ -30,6 +33,7 @@ _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
     IntentId.COMMISSION_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
     IntentId.SHIPPING_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
     IntentId.RETURN_REFUND_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.COMPLAINT_ORDER_FOLLOWUP: SuggestedAction.HUMAN_FOLLOWUP,
     IntentId.TECHNICAL_BUG_REPORT: SuggestedAction.ESCALATE,
     IntentId.GENERAL_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
 }
@@ -48,6 +52,69 @@ def _combined_text(message: str, context: list[ConversationMessage] | None) -> s
 
 def _has_any(text: str, markers: tuple[str, ...]) -> bool:
     return any(marker in text for marker in markers)
+
+
+def _context_text(context: list[ConversationMessage] | None) -> str:
+    if not context:
+        return ""
+    return " ".join(_normalize(msg.content) for msg in context)
+
+
+def _has_complaint_context(context: list[ConversationMessage] | None) -> bool:
+    text = _context_text(context)
+    return _has_any(text, _COMPLAINT_CONTEXT_MARKERS) or "inc-" in text
+
+
+def _has_complaint_resolution(text: str) -> bool:
+    return _has_any(text, _COMPLAINT_RESOLUTION_MARKERS)
+
+
+def _has_bank_change_context(text: str) -> bool:
+    if _has_any(text, ("شبا", "iban", "بانک")):
+        return True
+    if "حساب" not in text:
+        return False
+    if _has_any(text, _BUYER_REFUND_PHRASES):
+        return False
+    return True
+
+
+def _bank_card_settlement_result(
+    text: str,
+    *,
+    context_flags: list[str],
+    bank_change: bool,
+    card_change: bool,
+) -> IntentClassificationResult:
+    flags = list(context_flags)
+    negative: list[IntentId] = []
+    if settlement_context := "settlement_context" in context_flags:
+        negative.append(IntentId.SETTLEMENT_INQUIRY)
+
+    if bank_change and card_change:
+        flags.append("card_provided")
+        evidence = [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text]
+        if settlement_context:
+            evidence.append("تسویه")
+        return _build_result(
+            IntentId.BANK_ACCOUNT_CHANGE,
+            0.85,
+            evidence,
+            context_flags=flags,
+            negative_intents=negative,
+        )
+
+    primary = IntentId.BANK_ACCOUNT_CHANGE if bank_change else IntentId.CARD_CHANGE_REQUEST
+    evidence = [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text]
+    if settlement_context:
+        evidence.append("تسویه")
+    return _build_result(
+        primary,
+        0.85,
+        evidence,
+        context_flags=flags,
+        negative_intents=negative,
+    )
 
 
 def _build_result(
@@ -96,18 +163,24 @@ def classify_intent_with_rules(
             context_flags=context_flags,
         )
 
-    bank_change = _has_any(text, _BANK_MARKERS)
+    if conversation_context and _has_complaint_context(
+        conversation_context
+    ) and _has_complaint_resolution(text):
+        return _build_result(
+            IntentId.COMPLAINT_ORDER_FOLLOWUP,
+            0.85,
+            ["شکایت", "پیگیری/برگشت"],
+            context_flags=context_flags,
+        )
+
+    bank_change = _has_bank_change_context(text)
     card_change = _has_any(text, _CARD_MARKERS)
     if settlement_context and (bank_change or card_change):
-        primary = IntentId.BANK_ACCOUNT_CHANGE if bank_change else IntentId.CARD_CHANGE_REQUEST
-        evidence = [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text]
-        evidence.append("تسویه")
-        return _build_result(
-            primary,
-            0.85,
-            evidence,
+        return _bank_card_settlement_result(
+            text,
             context_flags=context_flags,
-            negative_intents=[IntentId.SETTLEMENT_INQUIRY],
+            bank_change=bank_change,
+            card_change=card_change,
         )
 
     if settlement_context and not bank_change and not card_change:
@@ -156,6 +229,16 @@ def classify_intent_with_rules(
             0.85,
             ["اطلاعات فروشگاه"],
             context_flags=context_flags,
+        )
+
+    if bank_change and card_change:
+        flags = list(context_flags)
+        flags.append("card_provided")
+        return _build_result(
+            IntentId.BANK_ACCOUNT_CHANGE,
+            0.85,
+            [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text],
+            context_flags=flags,
         )
 
     if card_change:
