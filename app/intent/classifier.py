@@ -199,11 +199,13 @@ def classify_intent_with_rules(
             context_flags=context_flags,
         )
 
-    if _has_any(text, _PRODUCT_MARKERS) and _has_any(text, ("تایید", "approval")):
+    if _has_any(text, _PRODUCT_MARKERS) and _has_any(
+        text, ("تایید", "approval", "بررسی", "رسیدگی")
+    ):
         return _build_result(
             IntentId.PRODUCT_APPROVAL_REQUEST,
             0.85,
-            ["محصول", "تایید"],
+            ["محصول", "تایید/بررسی"],
             context_flags=context_flags,
         )
 

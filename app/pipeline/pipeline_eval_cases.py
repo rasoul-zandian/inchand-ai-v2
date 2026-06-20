@@ -132,7 +132,7 @@ PIPELINE_EVAL_CASES: list[PipelineEvalCase] = [
     ),
     PipelineEvalCase(
         case_id="case_10_variation_product_approval",
-        message="سلام محصولاتم در انتظار بررسی مونده لطفا رسیدگی کنید",
+        message="سلام محصولات فروشگاهم در انتظار بررسی مونده لطفا رسیدگی کنید",
         expected_intent=IntentId.PRODUCT_APPROVAL_REQUEST,
         is_known=False,
         reply_contains_any=("بررسی", "تأیید", "تایید", "محصول"),
