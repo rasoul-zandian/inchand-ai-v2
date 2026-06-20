@@ -1,10 +1,36 @@
 """Placeholder intent classifier (rule-backed until LLM integration)."""
 
 from app.intent.taxonomy import IntentId
-from app.models.intent import IntentClassificationResult
+from app.models.intent import IntentClassificationResult, SuggestedAction
 from app.models.messages import ConversationMessage
 
 _SETTLEMENT_MARKERS = ("تسویه", "settlement", "واریز")
+_BANK_MARKERS = ("شبا", "حساب", "بانک", "iban")
+_CARD_MARKERS = ("کارت", "card")
+_ORDER_MARKERS = ("سفارش", "order")
+_PRODUCT_MARKERS = ("محصول", "product")
+
+_DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
+    IntentId.ORDER_REGISTRATION_ISSUE: SuggestedAction.ESCALATE,
+    IntentId.ORDER_STATUS_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.ORDER_CANCELLATION: SuggestedAction.HUMAN_FOLLOWUP,
+    IntentId.PRODUCT_APPROVAL_REQUEST: SuggestedAction.HUMAN_FOLLOWUP,
+    IntentId.PRODUCT_REJECTION_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.PRODUCT_EDIT_REQUEST: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.SHOP_ADDRESS_UPDATE: SuggestedAction.REQUEST_MISSING_INFORMATION,
+    IntentId.SHOP_PROFILE_UPDATE: SuggestedAction.REQUEST_MISSING_INFORMATION,
+    IntentId.BANK_ACCOUNT_CHANGE: SuggestedAction.REQUEST_MISSING_INFORMATION,
+    IntentId.CARD_CHANGE_REQUEST: SuggestedAction.REQUEST_MISSING_INFORMATION,
+    IntentId.CONTRACT_APPROVAL: SuggestedAction.HUMAN_FOLLOWUP,
+    IntentId.SETTLEMENT_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.DOCUMENT_SUBMISSION: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.ACCOUNT_ACCESS_ISSUE: SuggestedAction.ESCALATE,
+    IntentId.COMMISSION_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.SHIPPING_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.RETURN_REFUND_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+    IntentId.TECHNICAL_BUG_REPORT: SuggestedAction.ESCALATE,
+    IntentId.GENERAL_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
+}
 
 
 def _normalize(text: str) -> str:
@@ -18,59 +44,201 @@ def _combined_text(message: str, context: list[ConversationMessage] | None) -> s
     return " ".join(parts)
 
 
+def _has_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _build_result(
+    primary_intent: IntentId,
+    confidence: float,
+    evidence: list[str],
+    *,
+    context_flags: list[str] | None = None,
+    negative_intents: list[IntentId] | None = None,
+    entities: dict[str, str] | None = None,
+    suggested_action: SuggestedAction | None = None,
+) -> IntentClassificationResult:
+    return IntentClassificationResult(
+        primary_intent=primary_intent,
+        confidence=confidence,
+        evidence=evidence,
+        entities=entities or {},
+        context_flags=context_flags or [],
+        negative_intents=negative_intents or [],
+        suggested_action=suggested_action or _DEFAULT_ACTIONS[primary_intent],
+    )
+
+
 def classify_intent(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
 ) -> IntentClassificationResult:
     text = _normalize(message)
-    settlement_context = any(
-        marker in _combined_text(message, conversation_context)
-        for marker in _SETTLEMENT_MARKERS
-    )
+    combined = _combined_text(message, conversation_context)
+    settlement_context = _has_any(combined, _SETTLEMENT_MARKERS)
+    context_flags = ["settlement_context"] if settlement_context else []
 
-    if "قرارداد" in text and ("تایید" in text or "شبا" in text or "iban" in text):
-        return IntentClassificationResult(
-            intent=IntentId.CONTRACT_APPROVAL,
-            confidence=0.85,
-            rationale="Message mentions contract approval after IBAN submission.",
-            settlement_context=settlement_context,
+    if "قرارداد" in text and _has_any(text, ("تایید", "شبا", "iban")):
+        return _build_result(
+            IntentId.CONTRACT_APPROVAL,
+            0.85,
+            ["قرارداد", "تایید/شبا"],
+            context_flags=context_flags,
         )
 
-    if ("محصول" in text or "product" in text) and ("تایید" in text or "approval" in text):
-        return IntentClassificationResult(
-            intent=IntentId.PRODUCT_APPROVAL_REQUEST,
-            confidence=0.85,
-            rationale="Message requests product approval.",
-            settlement_context=settlement_context,
+    bank_change = _has_any(text, _BANK_MARKERS)
+    card_change = _has_any(text, _CARD_MARKERS)
+    if settlement_context and (bank_change or card_change):
+        primary = IntentId.BANK_ACCOUNT_CHANGE if bank_change else IntentId.CARD_CHANGE_REQUEST
+        evidence = [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text]
+        evidence.append("تسویه")
+        return _build_result(
+            primary,
+            0.85,
+            evidence,
+            context_flags=context_flags,
+            negative_intents=[IntentId.SETTLEMENT_INQUIRY],
+        )
+
+    if settlement_context and not bank_change and not card_change:
+        return _build_result(
+            IntentId.SETTLEMENT_INQUIRY,
+            0.85,
+            ["تسویه"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _PRODUCT_MARKERS) and ("رد" in text or "rejected" in text):
+        return _build_result(
+            IntentId.PRODUCT_REJECTION_INQUIRY,
+            0.85,
+            ["محصول", "رد"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _PRODUCT_MARKERS) and _has_any(text, ("تایید", "approval")):
+        return _build_result(
+            IntentId.PRODUCT_APPROVAL_REQUEST,
+            0.85,
+            ["محصول", "تایید"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _PRODUCT_MARKERS) and _has_any(text, ("قیمت", "ویرایش", "edit", "price")):
+        return _build_result(
+            IntentId.PRODUCT_EDIT_REQUEST,
+            0.85,
+            ["محصول", "ویرایش/قیمت"],
+            context_flags=context_flags,
         )
 
     if "آدرس" in text or "address" in text:
-        return IntentClassificationResult(
-            intent=IntentId.SHOP_ADDRESS_UPDATE,
-            confidence=0.85,
-            rationale="Message requests a shop address update.",
-            settlement_context=settlement_context,
+        return _build_result(
+            IntentId.SHOP_ADDRESS_UPDATE,
+            0.85,
+            ["آدرس"],
+            context_flags=context_flags,
         )
 
-    if any(k in text for k in ("شبا", "حساب", "بانک", "iban")):
-        return IntentClassificationResult(
-            intent=IntentId.BANK_ACCOUNT_CHANGE,
-            confidence=0.85,
-            rationale="Message requests bank account or IBAN update.",
-            settlement_context=settlement_context,
+    if _has_any(text, ("نام فروشگاه", "تلفن", "phone", "shop name")):
+        return _build_result(
+            IntentId.SHOP_PROFILE_UPDATE,
+            0.85,
+            ["اطلاعات فروشگاه"],
+            context_flags=context_flags,
         )
 
-    if ("سفارش" in text or "order" in text) and ("ثبت" in text or "register" in text or "خطا" in text):
-        return IntentClassificationResult(
-            intent=IntentId.ORDER_REGISTRATION_ISSUE,
-            confidence=0.85,
-            rationale="Message reports an order registration problem.",
-            settlement_context=settlement_context,
+    if card_change:
+        return _build_result(
+            IntentId.CARD_CHANGE_REQUEST,
+            0.85,
+            ["کارت"],
+            context_flags=context_flags,
         )
 
-    return IntentClassificationResult(
-        intent=IntentId.ORDER_REGISTRATION_ISSUE,
-        confidence=0.1,
-        rationale="No rule matched; default fallback.",
-        settlement_context=settlement_context,
+    if bank_change:
+        return _build_result(
+            IntentId.BANK_ACCOUNT_CHANGE,
+            0.85,
+            [m for m in _BANK_MARKERS if m in text],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("لغو", "کنسل", "cancel")):
+        return _build_result(
+            IntentId.ORDER_CANCELLATION,
+            0.85,
+            ["سفارش", "لغو"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("وضعیت", "پیگیری", "status", "track")):
+        return _build_result(
+            IntentId.ORDER_STATUS_INQUIRY,
+            0.85,
+            ["سفارش", "وضعیت/پیگیری"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("ثبت", "register", "خطا", "error")):
+        return _build_result(
+            IntentId.ORDER_REGISTRATION_ISSUE,
+            0.85,
+            ["سفارش", "ثبت/خطا"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("مدارک", "آپلود", "upload", "document")):
+        return _build_result(
+            IntentId.DOCUMENT_SUBMISSION,
+            0.85,
+            ["مدارک"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("ورود", "رمز", "login", "password")):
+        return _build_result(
+            IntentId.ACCOUNT_ACCESS_ISSUE,
+            0.85,
+            ["دسترسی/رمز"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("کارمزد", "commission", "fee")):
+        return _build_result(
+            IntentId.COMMISSION_INQUIRY,
+            0.85,
+            ["کارمزد"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("ارسال", "پست", "shipping", "delivery")):
+        return _build_result(
+            IntentId.SHIPPING_INQUIRY,
+            0.85,
+            ["ارسال"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("مرجوعی", "استرداد", "refund", "return")):
+        return _build_result(
+            IntentId.RETURN_REFUND_INQUIRY,
+            0.85,
+            ["مرجوعی/استرداد"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, ("باگ", "کرش", "crash", "bug")):
+        return _build_result(
+            IntentId.TECHNICAL_BUG_REPORT,
+            0.85,
+            ["باگ/کرش"],
+            context_flags=context_flags,
+        )
+
+    return _build_result(
+        IntentId.GENERAL_INQUIRY,
+        0.1,
+        ["fallback"],
+        context_flags=context_flags,
     )

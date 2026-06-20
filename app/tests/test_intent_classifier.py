@@ -1,66 +1,51 @@
-import pytest
-
 from app.intent.classifier import classify_intent
 from app.intent.taxonomy import IntentId
-from app.models.messages import ConversationMessage
+from app.models.intent import SuggestedAction
 
 
-@pytest.mark.parametrize(
-    ("message", "expected_intent", "settlement_context"),
-    [
-        (
-            "وقتی سفارش رو ثبت میکنم خطا میده و ثبت نمیشه",
-            IntentId.ORDER_REGISTRATION_ISSUE,
-            False,
-        ),
-        (
-            "لطفا محصول جدیدم رو تایید کنید، هنوز تایید نشده",
-            IntentId.PRODUCT_APPROVAL_REQUEST,
-            False,
-        ),
-        (
-            "میخوام آدرس فروشگاه رو عوض کنم، راهنمایی کنید",
-            IntentId.SHOP_ADDRESS_UPDATE,
-            False,
-        ),
-        (
-            "میخوام شماره شبا و حساب بانکی رو تغییر بدم",
-            IntentId.BANK_ACCOUNT_CHANGE,
-            False,
-        ),
-        (
-            "شبا رو ثبت کردم، قرارداد کی تایید میشه؟",
-            IntentId.CONTRACT_APPROVAL,
-            False,
-        ),
-        (
-            "برای تسویه حساب باید شبا رو عوض کنم",
-            IntentId.BANK_ACCOUNT_CHANGE,
-            True,
-        ),
-    ],
-    ids=[
-        "order_registration_issue",
-        "product_approval_request",
-        "shop_address_update",
-        "bank_account_change",
-        "contract_approval_after_iban",
-        "bank_account_change_settlement",
-    ],
-)
-def test_classify_intent_failed_examples(
-    message: str,
-    expected_intent: IntentId,
-    settlement_context: bool,
-) -> None:
-    context = (
-        [ConversationMessage(role="user", content="موضوع تسویه حساب")]
-        if settlement_context
-        else None
-    )
-    result = classify_intent(message, conversation_context=context)
+def test_bank_change_with_settlement_not_settlement_inquiry() -> None:
+    result = classify_intent("برای تسویه حساب باید شبا رو عوض کنم")
 
-    assert result.intent == expected_intent
-    assert result.confidence >= 0.0
-    assert result.rationale
-    assert result.settlement_context is settlement_context
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+    assert result.primary_intent != IntentId.SETTLEMENT_INQUIRY
+    assert "settlement_context" in result.context_flags
+    assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
+    assert result.suggested_action == SuggestedAction.REQUEST_MISSING_INFORMATION
+
+
+def test_pure_settlement_timing_is_settlement_inquiry() -> None:
+    result = classify_intent("تسویه این هفته کی واریز میشه؟")
+
+    assert result.primary_intent == IntentId.SETTLEMENT_INQUIRY
+    assert "settlement_context" in result.context_flags
+    assert IntentId.SETTLEMENT_INQUIRY not in result.negative_intents
+
+
+def test_product_approval_request() -> None:
+    result = classify_intent("لطفا محصول جدیدم رو تایید کنید، هنوز تایید نشده")
+
+    assert result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
+    assert result.confidence >= 0.8
+    assert result.evidence
+    assert result.suggested_action == SuggestedAction.HUMAN_FOLLOWUP
+
+
+def test_shop_address_update() -> None:
+    result = classify_intent("میخوام آدرس فروشگاه رو عوض کنم، راهنمایی کنید")
+
+    assert result.primary_intent == IntentId.SHOP_ADDRESS_UPDATE
+    assert "آدرس" in result.evidence
+
+
+def test_order_registration_issue() -> None:
+    result = classify_intent("وقتی سفارش رو ثبت میکنم خطا میده و ثبت نمیشه")
+
+    assert result.primary_intent == IntentId.ORDER_REGISTRATION_ISSUE
+    assert result.suggested_action == SuggestedAction.ESCALATE
+
+
+def test_contract_approval_after_iban_submission() -> None:
+    result = classify_intent("شبا رو ثبت کردم، قرارداد کی تایید میشه؟")
+
+    assert result.primary_intent == IntentId.CONTRACT_APPROVAL
+    assert result.suggested_action == SuggestedAction.HUMAN_FOLLOWUP
