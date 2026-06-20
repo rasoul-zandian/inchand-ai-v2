@@ -1,0 +1,78 @@
+"""Minimal end-to-end seller support pipeline."""
+
+from typing import Callable
+
+from app.intent.classifier import classify_intent
+from app.models.messages import ConversationMessage
+from app.models.pipeline import PipelineResult
+from app.models.reply import ReplyGenerationResult
+from app.models.tool_contracts import ToolRequest, ToolResult
+from app.pipeline.order_lookup_step import run_selected_order_lookup
+from app.reply.enrichment import enrich_reply_with_order_lookup
+from app.reply.evaluation import evaluate_reply
+from app.reply.generator import generate_reply
+from app.reply.revision import revise_reply
+from app.tools.selection import select_tools
+
+LookupFn = Callable[[ToolRequest], ToolResult]
+
+
+def _tool_context(
+    seller_message: str,
+    conversation_context: list[ConversationMessage] | None,
+) -> dict[str, str]:
+    context = {"seller_message": seller_message}
+    if conversation_context:
+        for index, message in enumerate(conversation_context):
+            context[f"{message.role}_{index}"] = message.content
+    return context
+
+
+def run_pipeline(
+    seller_message: str,
+    conversation_context: list[ConversationMessage] | None = None,
+    *,
+    lookup_fn: LookupFn | None = None,
+) -> PipelineResult:
+    intent_result = classify_intent(seller_message, conversation_context=conversation_context)
+    reply_result = generate_reply(intent_result, conversation_context=conversation_context)
+    evaluation_result = evaluate_reply(
+        seller_message,
+        intent_result,
+        reply_result,
+        conversation_context=conversation_context,
+    )
+    revision_result = revise_reply(
+        seller_message,
+        intent_result,
+        reply_result,
+        evaluation_result,
+    )
+
+    if evaluation_result.passed:
+        current_reply = reply_result
+    else:
+        current_reply = reply_result.model_copy(update={"text": revision_result.revised_text})
+
+    tool_selection_result = select_tools(intent_result, conversation_context=conversation_context)
+    order_lookup_result = run_selected_order_lookup(
+        tool_selection_result,
+        intent_result,
+        context=_tool_context(seller_message, conversation_context),
+        lookup_fn=lookup_fn,
+    )
+    final_reply = enrich_reply_with_order_lookup(
+        current_reply,
+        intent_result,
+        order_lookup_result,
+    )
+
+    return PipelineResult(
+        intent_result=intent_result,
+        reply_result=reply_result,
+        evaluation_result=evaluation_result,
+        revision_result=revision_result,
+        tool_selection_result=tool_selection_result,
+        order_lookup_result=order_lookup_result,
+        final_reply=final_reply,
+    )
