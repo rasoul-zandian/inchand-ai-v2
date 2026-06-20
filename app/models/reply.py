@@ -10,3 +10,9 @@ class ReplyGenerationResult(BaseModel):
     primary_intent: IntentId
     suggested_action: SuggestedAction
     warnings: list[str] = Field(default_factory=list)
+
+
+class ReplyEvaluationResult(BaseModel):
+    passed: bool
+    score: float = Field(ge=0.0, le=1.0)
+    issues: list[str] = Field(default_factory=list)
