@@ -16,3 +16,10 @@ class ReplyEvaluationResult(BaseModel):
     passed: bool
     score: float = Field(ge=0.0, le=1.0)
     issues: list[str] = Field(default_factory=list)
+
+
+class ReplyRevisionResult(BaseModel):
+    revised: bool
+    original_text: str
+    revised_text: str
+    revision_reason: str = ""
