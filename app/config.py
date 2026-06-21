@@ -12,7 +12,9 @@ class Settings:
     )
     inchand_api_base_url: str = os.getenv("INCHAND_API_BASE_URL", "")
     inchand_api_key_name: str = os.getenv("INCHAND_API_KEY_NAME", "Authorization")
-    inchand_api_key_value: str = os.getenv("INCHAND_API_KEY_VALUE", "")
+    inchand_api_key_value: str = os.getenv("INCHAND_API_KEY_VALUE") or os.getenv(
+        "INCHAND_INTERNAL_TOKEN", ""
+    )
     inchand_order_lookup_timeout_seconds: float = float(
         os.getenv("INCHAND_ORDER_LOOKUP_TIMEOUT_SECONDS", "10")
     )
