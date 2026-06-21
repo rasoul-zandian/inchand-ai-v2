@@ -18,9 +18,10 @@ def force_rule_provider(monkeypatch):
 def test_pipeline_passes_conversation_context_to_classifier(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_classify(message, conversation_context=None):
+    def fake_classify(message, conversation_context=None, room_type=None):
         captured["message"] = message
         captured["conversation_context"] = conversation_context
+        captured["room_type"] = room_type
         return IntentClassificationResult(
             primary_intent=IntentId.GENERAL_INQUIRY,
             confidence=0.5,
@@ -34,6 +35,25 @@ def test_pipeline_passes_conversation_context_to_classifier(monkeypatch) -> None
 
     assert captured["message"] == "تماس گرفته شد"
     assert captured["conversation_context"] == context
+    assert captured["room_type"] is None
+
+
+def test_pipeline_passes_room_type_to_classifier(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_classify(message, conversation_context=None, room_type=None):
+        captured["room_type"] = room_type
+        return IntentClassificationResult(
+            primary_intent=IntentId.GENERAL_INQUIRY,
+            confidence=0.5,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        )
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", fake_classify)
+
+    run_pipeline("لغو کنید", room_type="complaint")
+
+    assert captured["room_type"] == "complaint"
 
 
 def test_bank_account_change_pipeline_completes_with_final_reply() -> None:

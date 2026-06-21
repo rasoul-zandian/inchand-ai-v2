@@ -53,7 +53,7 @@ def test_accuracy_calculation_works(monkeypatch) -> None:
         ),
     ]
 
-    def fake_pipeline(message, conversation_context=None):
+    def fake_pipeline(message, conversation_context=None, room_type=None):
         intent = (
             IntentId.SETTLEMENT_INQUIRY
             if "تسویه" in message

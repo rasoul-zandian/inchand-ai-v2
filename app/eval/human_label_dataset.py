@@ -30,6 +30,7 @@ class HumanLabelCase:
     expected_intent: str
     conversation_context: list[ConversationMessage] = field(default_factory=list)
     label_notes: str = ""
+    room_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,8 @@ def load_human_label_workbook(path: str | Path) -> tuple[list[HumanLabelCase], l
         if not case_id or not seller_message or not expected_intent:
             continue
 
+        room_type = record.get("room_type", "").strip() or None
+
         case = HumanLabelCase(
             case_id=case_id,
             seller_message=seller_message,
@@ -138,6 +141,7 @@ def load_human_label_workbook(path: str | Path) -> tuple[list[HumanLabelCase], l
                 record.get("conversation_context_readable", "")
             ),
             label_notes=record.get("label_notes", "").strip(),
+            room_type=room_type,
         )
         if expected_intent in _VALID_INTENTS:
             evaluable.append(case)
@@ -159,6 +163,7 @@ def evaluate_human_labels(cases: list[HumanLabelCase]) -> HumanLabelEvalReport:
         pipeline = run_pipeline(
             case.seller_message,
             conversation_context=case.conversation_context or None,
+            room_type=case.room_type,
         )
         predicted = pipeline.intent_result.primary_intent.value
         passed = predicted == case.expected_intent

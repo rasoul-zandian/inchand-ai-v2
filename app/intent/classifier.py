@@ -49,6 +49,26 @@ _DELIVERY_CONFIRMATION_MARKERS = (
     "دریافت شده",
 )
 
+_VALID_ROOM_TYPES = frozenset({"support", "fund", "cancelation", "complaint"})
+_COMPLAINT_ROOM_EXPLICIT_INTENTS = frozenset(
+    {
+        IntentId.PRODUCT_APPROVAL_REQUEST,
+        IntentId.PRODUCT_REJECTION_INQUIRY,
+        IntentId.PRODUCT_EDIT_REQUEST,
+        IntentId.SHOP_ADDRESS_UPDATE,
+        IntentId.SHOP_PROFILE_UPDATE,
+        IntentId.BANK_ACCOUNT_CHANGE,
+        IntentId.CARD_CHANGE_REQUEST,
+        IntentId.SETTLEMENT_INQUIRY,
+        IntentId.CONTRACT_APPROVAL,
+        IntentId.DOCUMENT_SUBMISSION,
+        IntentId.TECHNICAL_BUG_REPORT,
+        IntentId.ACCOUNT_ACCESS_ISSUE,
+        IntentId.ORDER_REGISTRATION_ISSUE,
+        IntentId.COMMISSION_INQUIRY,
+    }
+)
+_CANCELATION_ROOM_EXPLICIT_INTENTS = _COMPLAINT_ROOM_EXPLICIT_INTENTS
 _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
     IntentId.ORDER_REGISTRATION_ISSUE: SuggestedAction.ESCALATE,
     IntentId.ORDER_STATUS_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
@@ -258,7 +278,156 @@ def _has_contract_reference(text: str) -> bool:
     return "قرارداد" in text or "قرار داد" in text
 
 
-def classify_intent_with_rules(
+def _normalize_room_type(room_type: str | None) -> str | None:
+    if not room_type:
+        return None
+    normalized = room_type.strip().lower()
+    return normalized if normalized in _VALID_ROOM_TYPES else None
+
+
+def _is_complaint_room_followup(text: str) -> bool:
+    if _is_delivery_confirmation_message(text):
+        return False
+    if _is_complaint_followup_message(text):
+        return True
+    if _has_any(text, ("لغو", "کنسل", "cancel")):
+        return True
+    if _has_any(text, ("ارسال", "پست", "shipping", "مرجوع", "استرداد", "refund", "return")):
+        return True
+    return False
+
+
+def _try_fund_room_intent(
+    text: str,
+    *,
+    context_flags: list[str],
+) -> IntentClassificationResult | None:
+    settlement_context = _has_any(text, _SETTLEMENT_MARKERS)
+    flags = list(context_flags)
+    if settlement_context and "settlement_context" not in flags:
+        flags.append("settlement_context")
+
+    if _has_contract_reference(text) and _has_any(text, ("تایید", "شبا", "iban")):
+        return _build_result(
+            IntentId.CONTRACT_APPROVAL,
+            0.85,
+            ["قرارداد", "تایید/شبا"],
+            context_flags=flags,
+        )
+
+    bank_change = _has_bank_change_context(text)
+    card_change = _has_any(text, _CARD_MARKERS)
+    if settlement_context and (bank_change or card_change):
+        return _bank_card_settlement_result(
+            text,
+            context_flags=flags,
+            bank_change=bank_change,
+            card_change=card_change,
+        )
+
+    if settlement_context:
+        return _build_result(
+            IntentId.SETTLEMENT_INQUIRY,
+            0.85,
+            ["تسویه"],
+            context_flags=flags,
+        )
+
+    if bank_change and card_change:
+        flags.append("card_provided")
+        return _build_result(
+            IntentId.BANK_ACCOUNT_CHANGE,
+            0.85,
+            [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text],
+            context_flags=flags,
+        )
+
+    if card_change:
+        return _build_result(
+            IntentId.CARD_CHANGE_REQUEST,
+            0.85,
+            ["کارت"],
+            context_flags=flags,
+        )
+
+    if bank_change:
+        return _build_result(
+            IntentId.BANK_ACCOUNT_CHANGE,
+            0.85,
+            [m for m in _BANK_MARKERS if m in text],
+            context_flags=flags,
+        )
+
+    if _has_any(text, ("مدارک", "آپلود", "upload", "document")):
+        return _build_result(
+            IntentId.DOCUMENT_SUBMISSION,
+            0.85,
+            ["مدارک"],
+            context_flags=flags,
+        )
+
+    return None
+
+
+def _apply_room_type_prior(
+    result: IntentClassificationResult,
+    text: str,
+    room_type: str | None,
+    context_flags: list[str],
+) -> IntentClassificationResult:
+    room = _normalize_room_type(room_type)
+    if room is None or room == "support":
+        return result
+
+    flags = list(context_flags)
+    flags.append(f"room_type_{room}")
+
+    if room == "complaint":
+        if result.primary_intent in _COMPLAINT_ROOM_EXPLICIT_INTENTS:
+            return result.model_copy(update={"context_flags": flags})
+        if result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST:
+            return result.model_copy(update={"context_flags": flags})
+        if result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP:
+            return result.model_copy(update={"context_flags": flags})
+        if _is_complaint_room_followup(text) or result.primary_intent in {
+            IntentId.ORDER_CANCELLATION,
+            IntentId.SHIPPING_INQUIRY,
+            IntentId.GENERAL_INQUIRY,
+            IntentId.RETURN_REFUND_INQUIRY,
+            IntentId.ORDER_STATUS_INQUIRY,
+        }:
+            return _build_result(
+                IntentId.COMPLAINT_ORDER_FOLLOWUP,
+                0.85,
+                ["room_type", "complaint"],
+                context_flags=flags,
+            )
+        return result.model_copy(update={"context_flags": flags})
+
+    if room == "cancelation":
+        if result.primary_intent in _CANCELATION_ROOM_EXPLICIT_INTENTS:
+            return result.model_copy(update={"context_flags": flags})
+        if result.primary_intent == IntentId.ORDER_CANCELLATION:
+            return result.model_copy(update={"context_flags": flags})
+        if _has_any(text, ("لغو", "کنسل", "cancel")) or _has_any(text, _ORDER_MARKERS):
+            return _build_result(
+                IntentId.ORDER_CANCELLATION,
+                0.85,
+                ["room_type", "cancelation"],
+                context_flags=flags,
+            )
+        return result.model_copy(update={"context_flags": flags})
+
+    if room == "fund":
+        fund_result = _try_fund_room_intent(text, context_flags=flags)
+        if fund_result is not None:
+            return fund_result
+        return result.model_copy(update={"context_flags": flags})
+
+    return result
+
+
+def _classify_intent_core(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
 ) -> IntentClassificationResult:
@@ -448,19 +617,40 @@ def classify_intent_with_rules(
     )
 
 
+def classify_intent_with_rules(
+    message: str,
+    conversation_context: list[ConversationMessage] | None = None,
+    room_type: str | None = None,
+) -> IntentClassificationResult:
+    text = _normalize(message)
+    result = _classify_intent_core(message, conversation_context)
+    return _apply_room_type_prior(result, text, room_type, list(result.context_flags))
+
+
 def classify_intent(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
+    room_type: str | None = None,
 ) -> IntentClassificationResult:
     if settings.intent_classifier_provider == "openai":
         llm_result, fallback_reason = try_classify_intent_with_openai(
             message,
             conversation_context,
+            room_type=room_type,
         )
         if llm_result is not None:
-            return llm_result
+            return _apply_room_type_prior(
+                llm_result,
+                _normalize(message),
+                room_type,
+                llm_result.context_flags,
+            )
 
-        rule_result = classify_intent_with_rules(message, conversation_context)
+        rule_result = classify_intent_with_rules(
+            message,
+            conversation_context,
+            room_type=room_type,
+        )
         return rule_result.model_copy(update={"fallback_reason": fallback_reason})
 
-    return classify_intent_with_rules(message, conversation_context)
+    return classify_intent_with_rules(message, conversation_context, room_type=room_type)

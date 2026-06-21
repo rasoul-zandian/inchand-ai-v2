@@ -31,10 +31,15 @@ def _tool_context(
 def run_pipeline(
     seller_message: str,
     conversation_context: list[ConversationMessage] | None = None,
+    room_type: str | None = None,
     *,
     lookup_fn: LookupFn | None = None,
 ) -> PipelineResult:
-    intent_result = classify_intent(seller_message, conversation_context=conversation_context)
+    intent_result = classify_intent(
+        seller_message,
+        conversation_context=conversation_context,
+        room_type=room_type,
+    )
     reply_result = generate_reply(intent_result, conversation_context=conversation_context)
     evaluation_result = evaluate_reply(
         seller_message,

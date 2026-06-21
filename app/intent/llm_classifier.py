@@ -22,8 +22,11 @@ _VALID_ACTIONS = {action.value for action in SuggestedAction}
 def _build_user_prompt(
     message: str,
     conversation_context: list[ConversationMessage] | None,
+    room_type: str | None = None,
 ) -> str:
     parts = ["Seller message:", message]
+    if room_type:
+        parts.append(f"Room type: {room_type}")
     if conversation_context:
         parts.append("Conversation context:")
         for item in conversation_context:
@@ -112,6 +115,7 @@ def _parse_llm_payload(raw: object) -> IntentClassificationResult:
 def try_classify_intent_with_openai(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
+    room_type: str | None = None,
     *,
     request_fn: RequestFn | None = None,
 ) -> tuple[IntentClassificationResult | None, str | None]:
@@ -121,7 +125,10 @@ def try_classify_intent_with_openai(
     caller = request_fn or _default_request_openai
     messages = [
         {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_user_prompt(message, conversation_context)},
+        {
+            "role": "user",
+            "content": _build_user_prompt(message, conversation_context, room_type),
+        },
     ]
 
     try:

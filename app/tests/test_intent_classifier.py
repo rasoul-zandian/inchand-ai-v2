@@ -273,3 +273,54 @@ def test_openai_settlement_bank_change_not_settlement_inquiry(monkeypatch) -> No
     assert "settlement_context" in result.context_flags
     assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
     assert result.fallback_reason is None
+
+
+def test_complaint_room_cancel_request_is_complaint_followup() -> None:
+    result = classify_intent("لطفا سفارششتون رو لغو کنید", room_type="complaint")
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+    assert result.primary_intent != IntentId.ORDER_CANCELLATION
+
+
+def test_complaint_room_return_update_is_complaint_followup() -> None:
+    result = classify_intent("کالا برگشت داده شد", room_type="complaint")
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+
+
+def test_complaint_room_delivery_confirmation_stays_delivery() -> None:
+    result = classify_intent("سفارش تحویل مشتری شد", room_type="complaint")
+
+    assert result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST
+    assert result.primary_intent != IntentId.COMPLAINT_ORDER_FOLLOWUP
+
+
+def test_fund_room_settlement_wording() -> None:
+    result = classify_intent("تسویه این هفته کی واریز میشه؟", room_type="fund")
+
+    assert result.primary_intent == IntentId.SETTLEMENT_INQUIRY
+    assert "room_type_fund" in result.context_flags
+
+
+def test_fund_room_iban_is_bank_account_change() -> None:
+    result = classify_intent(
+        "میخوام شماره شبا رو تغییر بدم IR800560213788805260753001",
+        room_type="fund",
+    )
+
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+
+
+def test_fund_room_card_is_card_change_request() -> None:
+    result = classify_intent("شماره کارت جدید: 6219861091629898", room_type="fund")
+
+    assert result.primary_intent == IntentId.CARD_CHANGE_REQUEST
+
+
+def test_support_room_product_approval_unchanged() -> None:
+    result = classify_intent(
+        "لطفا محصولاتی که هنوز تایید نشده رو تایید می کنید",
+        room_type="support",
+    )
+
+    assert result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
