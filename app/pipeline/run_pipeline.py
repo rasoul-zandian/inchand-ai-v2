@@ -8,6 +8,7 @@ from app.models.messages import ConversationMessage
 from app.models.pipeline import PipelineResult
 from app.models.reply import ReplyGenerationResult
 from app.models.tool_contracts import ToolRequest, ToolResult
+from app.observability.pipeline_logging import build_pipeline_log_record, emit_pipeline_log
 from app.pipeline.order_lookup_step import run_selected_order_lookup
 from app.reply.enrichment import enrich_reply_with_order_lookup
 from app.reply.evaluation import evaluate_reply
@@ -49,6 +50,7 @@ def run_pipeline(
     seller_message: str,
     conversation_context: list[ConversationMessage] | None = None,
     room_type: str | None = None,
+    metadata: dict | None = None,
     *,
     lookup_fn: LookupFn | None = None,
 ) -> PipelineResult:
@@ -93,7 +95,7 @@ def run_pipeline(
         intent_result.suggested_action,
     )
 
-    return PipelineResult(
+    result = PipelineResult(
         intent_result=intent_result,
         reply_result=reply_result,
         evaluation_result=evaluation_result,
@@ -103,3 +105,5 @@ def run_pipeline(
         final_reply=final_reply,
         needs_human_review=needs_human_review,
     )
+    emit_pipeline_log(build_pipeline_log_record(result, metadata))
+    return result
