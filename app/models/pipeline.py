@@ -23,3 +23,4 @@ class PipelineResult(BaseModel):
     tool_selection_result: ToolSelectionResult
     order_lookup_result: OrderLookupExecutionResult
     final_reply: ReplyGenerationResult
+    needs_human_review: bool = False

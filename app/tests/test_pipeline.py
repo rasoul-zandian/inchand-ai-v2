@@ -9,6 +9,10 @@ from app.pipeline.run_pipeline import run_pipeline
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
 from app.tools.selection import ORDER_LOOKUP
 
+_HUMAN_REVIEW_ACKNOWLEDGEMENT = (
+    "درخواست شما دریافت شد و جهت بررسی به کارشناسان مربوطه ارجاع شد."
+)
+
 
 @pytest.fixture(autouse=True)
 def force_rule_provider(monkeypatch):
@@ -74,10 +78,38 @@ def test_product_approval_request_no_tool_selected() -> None:
     assert result.intent_result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
     assert result.tool_selection_result.selected_tools == []
     assert result.order_lookup_result.executed is False
-    assert "محصول" in result.final_reply.text
+    assert result.needs_human_review is True
+    assert result.final_reply.text == _HUMAN_REVIEW_ACKNOWLEDGEMENT
 
 
-def test_order_status_inquiry_applies_enrichment(monkeypatch) -> None:
+def test_account_access_issue_send_gate() -> None:
+    result = run_pipeline("رمز عبورم کار نمیکنه و نمیتونم وارد پنل بشم")
+
+    assert result.intent_result.primary_intent == IntentId.ACCOUNT_ACCESS_ISSUE
+    assert result.needs_human_review is True
+    assert result.final_reply.text == _HUMAN_REVIEW_ACKNOWLEDGEMENT
+
+
+def test_complaint_followup_send_gate() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content=(
+                "فروشنده گرامی در مورد سفارش INC-7342409 شکایتی از فروشگاه شما ثبت شده است."
+            ),
+        ),
+    ]
+    result = run_pipeline(
+        "تماس گرفته شد، قرار شد کالا برگشت داده شود",
+        conversation_context=context,
+    )
+
+    assert result.intent_result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+    assert result.needs_human_review is True
+    assert result.final_reply.text == _HUMAN_REVIEW_ACKNOWLEDGEMENT
+
+
+def test_order_status_inquiry_preserves_enriched_reply(monkeypatch) -> None:
     intent = IntentClassificationResult(
         primary_intent=IntentId.ORDER_STATUS_INQUIRY,
         confidence=0.9,
@@ -105,6 +137,7 @@ def test_order_status_inquiry_applies_enrichment(monkeypatch) -> None:
 
     result = run_pipeline("سفارش INC-7342409 الان کجاست؟", lookup_fn=fake_lookup)
 
+    assert result.needs_human_review is False
     assert ORDER_LOOKUP in result.tool_selection_result.selected_tools
     assert result.order_lookup_result.executed is True
     assert "وضعیت سفارش INC-7342409: ارسال شده." in result.final_reply.text
@@ -137,6 +170,7 @@ def test_delivered_order_final_reply(monkeypatch) -> None:
 
     result = run_pipeline("وضعیت سفارش INC-7342409", lookup_fn=fake_lookup)
 
+    assert result.needs_human_review is False
     assert (
         result.final_reply.text
         == "وضعیت سفارش INC-7342409 در وضعیت تحویل شده قرار دارد."

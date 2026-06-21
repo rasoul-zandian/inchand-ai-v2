@@ -3,6 +3,7 @@
 from typing import Callable
 
 from app.intent.classifier import classify_intent
+from app.models.intent import SuggestedAction
 from app.models.messages import ConversationMessage
 from app.models.pipeline import PipelineResult
 from app.models.reply import ReplyGenerationResult
@@ -15,6 +16,22 @@ from app.reply.revision import revise_reply
 from app.tools.selection import select_tools
 
 LookupFn = Callable[[ToolRequest], ToolResult]
+
+_HUMAN_REVIEW_ACKNOWLEDGEMENT = (
+    "درخواست شما دریافت شد و جهت بررسی به کارشناسان مربوطه ارجاع شد."
+)
+
+
+def _apply_send_gate(
+    final_reply: ReplyGenerationResult,
+    suggested_action: SuggestedAction,
+) -> tuple[ReplyGenerationResult, bool]:
+    if suggested_action in {SuggestedAction.HUMAN_FOLLOWUP, SuggestedAction.ESCALATE}:
+        return (
+            final_reply.model_copy(update={"text": _HUMAN_REVIEW_ACKNOWLEDGEMENT}),
+            True,
+        )
+    return final_reply, False
 
 
 def _tool_context(
@@ -71,6 +88,10 @@ def run_pipeline(
         intent_result,
         order_lookup_result,
     )
+    final_reply, needs_human_review = _apply_send_gate(
+        final_reply,
+        intent_result.suggested_action,
+    )
 
     return PipelineResult(
         intent_result=intent_result,
@@ -80,4 +101,5 @@ def run_pipeline(
         tool_selection_result=tool_selection_result,
         order_lookup_result=order_lookup_result,
         final_reply=final_reply,
+        needs_human_review=needs_human_review,
     )
