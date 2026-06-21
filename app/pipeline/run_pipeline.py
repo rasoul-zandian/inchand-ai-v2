@@ -38,8 +38,11 @@ def _apply_send_gate(
 def _tool_context(
     seller_message: str,
     conversation_context: list[ConversationMessage] | None,
+    shop_id: str | None = None,
 ) -> dict[str, str]:
     context = {"seller_message": seller_message}
+    if shop_id:
+        context["shop_id"] = shop_id
     if conversation_context:
         for index, message in enumerate(conversation_context):
             context[f"{message.role}_{index}"] = message.content
@@ -79,10 +82,13 @@ def run_pipeline(
         current_reply = reply_result.model_copy(update={"text": revision_result.revised_text})
 
     tool_selection_result = select_tools(intent_result, conversation_context=conversation_context)
+    shop_id = None
+    if metadata and metadata.get("shop_id") is not None:
+        shop_id = str(metadata["shop_id"])
     order_lookup_result = run_selected_order_lookup(
         tool_selection_result,
         intent_result,
-        context=_tool_context(seller_message, conversation_context),
+        context=_tool_context(seller_message, conversation_context, shop_id=shop_id),
         lookup_fn=lookup_fn,
     )
     final_reply = enrich_reply_with_order_lookup(

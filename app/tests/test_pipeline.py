@@ -4,6 +4,7 @@ from app.config import settings
 from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
 from app.models.messages import ConversationMessage
+from app.models.pipeline import OrderLookupExecutionResult
 from app.models.tool_contracts import ToolRequest, ToolResult
 from app.pipeline.run_pipeline import run_pipeline
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
@@ -17,6 +18,24 @@ _HUMAN_REVIEW_ACKNOWLEDGEMENT = (
 @pytest.fixture(autouse=True)
 def force_rule_provider(monkeypatch):
     monkeypatch.setattr(settings, "intent_classifier_provider", "rule")
+    monkeypatch.setattr("app.pipeline.run_pipeline.emit_pipeline_log", lambda _record: None)
+
+
+def test_pipeline_passes_shop_id_to_tool_context(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_order_lookup(_tool_selection, _intent_result, context, lookup_fn=None):
+        captured["context"] = context
+        return OrderLookupExecutionResult(executed=False)
+
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.run_selected_order_lookup",
+        fake_order_lookup,
+    )
+
+    run_pipeline("سلام", metadata={"shop_id": "7304"})
+
+    assert captured["context"]["shop_id"] == "7304"
 
 
 def test_pipeline_passes_conversation_context_to_classifier(monkeypatch) -> None:

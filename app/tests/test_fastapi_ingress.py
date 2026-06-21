@@ -71,6 +71,53 @@ def test_response_contains_core_fields(client: TestClient) -> None:
     assert body["primary_intent"] == IntentId.ACCOUNT_ACCESS_ISSUE.value
     assert body["final_reply"]
     assert body["needs_human_review"] is True
+    assert body["should_send"] is False
+    assert body["send_gated"] is True
+    assert body["final_reply_source"] == "send_gate"
+
+
+def test_response_echoes_message_and_room_id(client: TestClient) -> None:
+    response = client.post(
+        "/internal/pipeline/run",
+        json={
+            "seller_message": "سلام",
+            "metadata": {"message_id": "202375", "room_id": "48423", "shop_id": "7304"},
+        },
+    )
+
+    body = response.json()
+    assert body["message_id"] == "202375"
+    assert body["room_id"] == "48423"
+    assert "shop_id" not in body
+
+
+def test_should_send_and_send_gated_for_auto_reply(client: TestClient, monkeypatch) -> None:
+    def fake_order_lookup(*_args, **_kwargs):
+        return OrderLookupExecutionResult(
+            executed=True,
+            tool_result=ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={"order_id": "INC-7342409", "order_status": "ارسال شده"},
+                summary="ok",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.run_selected_order_lookup",
+        fake_order_lookup,
+    )
+
+    response = client.post(
+        "/internal/pipeline/run",
+        json={"seller_message": "سفارش INC-7342409 الان کجاست؟"},
+    )
+
+    body = response.json()
+    assert body["needs_human_review"] is False
+    assert body["should_send"] is True
+    assert body["send_gated"] is False
+    assert body["final_reply_source"] in {"template", "template+enrichment"}
 
 
 def test_metadata_is_accepted(client: TestClient, monkeypatch) -> None:
