@@ -3,6 +3,7 @@ import pytest
 from app.config import settings
 from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
+from app.models.messages import ConversationMessage
 from app.models.tool_contracts import ToolRequest, ToolResult
 from app.pipeline.run_pipeline import run_pipeline
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
@@ -12,6 +13,27 @@ from app.tools.selection import ORDER_LOOKUP
 @pytest.fixture(autouse=True)
 def force_rule_provider(monkeypatch):
     monkeypatch.setattr(settings, "intent_classifier_provider", "rule")
+
+
+def test_pipeline_passes_conversation_context_to_classifier(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_classify(message, conversation_context=None):
+        captured["message"] = message
+        captured["conversation_context"] = conversation_context
+        return IntentClassificationResult(
+            primary_intent=IntentId.GENERAL_INQUIRY,
+            confidence=0.5,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        )
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", fake_classify)
+
+    context = [ConversationMessage(role="assistant", content="شکایت سفارش INC-7342409")]
+    run_pipeline("تماس گرفته شد", conversation_context=context)
+
+    assert captured["message"] == "تماس گرفته شد"
+    assert captured["conversation_context"] == context
 
 
 def test_bank_account_change_pipeline_completes_with_final_reply() -> None:

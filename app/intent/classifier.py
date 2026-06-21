@@ -11,8 +11,33 @@ _BANK_MARKERS = ("شبا", "حساب", "بانک", "iban")
 _CARD_MARKERS = ("کارت", "card")
 _ORDER_MARKERS = ("سفارش", "order")
 _PRODUCT_MARKERS = ("محصول", "product")
-_COMPLAINT_CONTEXT_MARKERS = ("شکایت", "complaint")
-_COMPLAINT_RESOLUTION_MARKERS = ("تماس", "برگشت", "قرار شد", "جایگزین", "refund", "return")
+_COMPLAINT_CONTEXT_MARKERS = (
+    "شکایت",
+    "complaint",
+    "متن شکایت خریدار",
+    "در مورد سفارش",
+)
+_COMPLAINT_FOLLOWUP_MARKERS = (
+    "تماس",
+    "برگشت",
+    "قرار شد",
+    "جایگزین",
+    "refund",
+    "return",
+    "تحویل",
+    "پرداخت",
+    "تعویض",
+    "نهایی",
+    "مرجوع",
+    "رسید",
+    "عودت",
+    "کد پستی",
+    "بارکد",
+    "پیگیری",
+    "تماس گرفته",
+    "بررسی شد",
+    "هماهنگ",
+)
 _BUYER_REFUND_PHRASES = ("حسابشون", "حساب مشتری", "به حسابش")
 
 _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
@@ -60,13 +85,76 @@ def _context_text(context: list[ConversationMessage] | None) -> str:
     return " ".join(_normalize(msg.content) for msg in context)
 
 
+def _admin_support_context_text(context: list[ConversationMessage] | None) -> str:
+    if not context:
+        return ""
+    admin_roles = {"assistant", "system"}
+    admin_text = " ".join(
+        _normalize(msg.content) for msg in context if msg.role in admin_roles
+    )
+    return admin_text or _context_text(context)
+
+
 def _has_complaint_context(context: list[ConversationMessage] | None) -> bool:
-    text = _context_text(context)
-    return _has_any(text, _COMPLAINT_CONTEXT_MARKERS) or "inc-" in text
+    text = _admin_support_context_text(context)
+    if _has_any(text, _COMPLAINT_CONTEXT_MARKERS):
+        return True
+    return "inc-" in text and "در مورد سفارش" in text
 
 
-def _has_complaint_resolution(text: str) -> bool:
-    return _has_any(text, _COMPLAINT_RESOLUTION_MARKERS)
+def _looks_like_address_or_contact_block(text: str) -> bool:
+    if "کد پستی" in text:
+        return True
+    digits = sum(ch.isdigit() for ch in text)
+    return digits >= 8 and not _has_any(text, ("لغو", "کنسل", "cancel"))
+
+
+def _is_complaint_followup_message(text: str) -> bool:
+    if _has_any(text, _COMPLAINT_FOLLOWUP_MARKERS):
+        return True
+    if _looks_like_address_or_contact_block(text):
+        return True
+    if len(text) <= 80 and _has_any(text, ("شد", "کرد", "کردیم", "کردند", "کردم")):
+        return True
+    return False
+
+
+def _try_protected_seller_intents(
+    text: str,
+    *,
+    settlement_context: bool,
+    context_flags: list[str],
+) -> IntentClassificationResult | None:
+    bank_change = _has_bank_change_context(text)
+    card_change = _has_any(text, _CARD_MARKERS)
+
+    if settlement_context and (bank_change or card_change):
+        return _bank_card_settlement_result(
+            text,
+            context_flags=context_flags,
+            bank_change=bank_change,
+            card_change=card_change,
+        )
+
+    if settlement_context and not bank_change and not card_change:
+        return _build_result(
+            IntentId.SETTLEMENT_INQUIRY,
+            0.85,
+            ["تسویه"],
+            context_flags=context_flags,
+        )
+
+    if _has_any(text, _PRODUCT_MARKERS) and _has_any(
+        text, ("تایید", "approval", "بررسی", "رسیدگی")
+    ):
+        return _build_result(
+            IntentId.PRODUCT_APPROVAL_REQUEST,
+            0.85,
+            ["محصول", "تایید/بررسی"],
+            context_flags=context_flags,
+        )
+
+    return None
 
 
 def _has_bank_change_context(text: str) -> bool:
@@ -163,49 +251,36 @@ def classify_intent_with_rules(
             context_flags=context_flags,
         )
 
-    if conversation_context and _has_complaint_context(
+    protected = _try_protected_seller_intents(
+        text,
+        settlement_context=settlement_context,
+        context_flags=context_flags,
+    )
+    if protected is not None:
+        return protected
+
+    if (
         conversation_context
-    ) and _has_complaint_resolution(text):
+        and _has_complaint_context(conversation_context)
+        and _is_complaint_followup_message(text)
+    ):
+        flags = list(context_flags)
+        flags.append("complaint_context")
         return _build_result(
             IntentId.COMPLAINT_ORDER_FOLLOWUP,
             0.85,
-            ["شکایت", "پیگیری/برگشت"],
-            context_flags=context_flags,
+            ["شکایت", "پیگیری/وضعیت"],
+            context_flags=flags,
         )
 
     bank_change = _has_bank_change_context(text)
     card_change = _has_any(text, _CARD_MARKERS)
-    if settlement_context and (bank_change or card_change):
-        return _bank_card_settlement_result(
-            text,
-            context_flags=context_flags,
-            bank_change=bank_change,
-            card_change=card_change,
-        )
-
-    if settlement_context and not bank_change and not card_change:
-        return _build_result(
-            IntentId.SETTLEMENT_INQUIRY,
-            0.85,
-            ["تسویه"],
-            context_flags=context_flags,
-        )
 
     if _has_any(text, _PRODUCT_MARKERS) and ("رد" in text or "rejected" in text):
         return _build_result(
             IntentId.PRODUCT_REJECTION_INQUIRY,
             0.85,
             ["محصول", "رد"],
-            context_flags=context_flags,
-        )
-
-    if _has_any(text, _PRODUCT_MARKERS) and _has_any(
-        text, ("تایید", "approval", "بررسی", "رسیدگی")
-    ):
-        return _build_result(
-            IntentId.PRODUCT_APPROVAL_REQUEST,
-            0.85,
-            ["محصول", "تایید/بررسی"],
             context_flags=context_flags,
         )
 

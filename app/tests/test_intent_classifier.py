@@ -51,6 +51,45 @@ def test_bank_and_card_with_settlement_prefers_bank_account_change() -> None:
     assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
 
 
+def test_complaint_context_with_seller_address_status_message() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content=(
+                "فروشنده گرامی متن شکایت خریدار: کالا معیوب بود. "
+                "در مورد سفارش INC-7342409 لطفا پیگیری کنید."
+            ),
+        ),
+    ]
+    message = (
+        "علیرضا حسین پور 09302751516 بوشهر - بندرگناوه "
+        "خیابان رزمندگان ۸ پلاک ۳ کد پستی: 7531653715"
+    )
+
+    result = classify_intent(message, conversation_context=context)
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+    assert "complaint_context" in result.context_flags
+
+
+def test_bank_account_change_not_overridden_by_complaint_context() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="در مورد سفارش INC-7342409 شکایتی ثبت شده است.",
+        ),
+    ]
+    message = (
+        "سلام به دلیل اختلال در بانک ملی برای تسویه حساب می خوام کارت جدید "
+        "معرفی کنم. شماره شبا: 790780202010020000219015"
+    )
+
+    result = classify_intent(message, conversation_context=context)
+
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+    assert result.primary_intent != IntentId.COMPLAINT_ORDER_FOLLOWUP
+
+
 def test_complaint_context_with_seller_followup() -> None:
     context = [
         ConversationMessage(
