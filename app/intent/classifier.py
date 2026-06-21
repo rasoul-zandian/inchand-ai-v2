@@ -1,6 +1,7 @@
 """Intent classifier with rule-backed default and optional OpenAI provider."""
 
 from app.config import settings
+from app.entities.extractor import extract_entities
 from app.intent.llm_classifier import try_classify_intent_with_openai
 from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
@@ -617,6 +618,16 @@ def _classify_intent_core(
     )
 
 
+def _attach_extracted_entities(
+    result: IntentClassificationResult,
+    message: str,
+    conversation_context: list[ConversationMessage] | None,
+) -> IntentClassificationResult:
+    extracted = extract_entities(message, conversation_context).to_dict()
+    merged = {**extracted, **result.entities}
+    return result.model_copy(update={"entities": merged})
+
+
 def classify_intent_with_rules(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
@@ -624,7 +635,8 @@ def classify_intent_with_rules(
 ) -> IntentClassificationResult:
     text = _normalize(message)
     result = _classify_intent_core(message, conversation_context)
-    return _apply_room_type_prior(result, text, room_type, list(result.context_flags))
+    result = _apply_room_type_prior(result, text, room_type, list(result.context_flags))
+    return _attach_extracted_entities(result, message, conversation_context)
 
 
 def classify_intent(
@@ -639,12 +651,13 @@ def classify_intent(
             room_type=room_type,
         )
         if llm_result is not None:
-            return _apply_room_type_prior(
+            result = _apply_room_type_prior(
                 llm_result,
                 _normalize(message),
                 room_type,
                 llm_result.context_flags,
             )
+            return _attach_extracted_entities(result, message, conversation_context)
 
         rule_result = classify_intent_with_rules(
             message,
