@@ -39,6 +39,15 @@ _COMPLAINT_FOLLOWUP_MARKERS = (
     "هماهنگ",
 )
 _BUYER_REFUND_PHRASES = ("حسابشون", "حساب مشتری", "به حسابش")
+_DELIVERY_CONFIRMATION_MARKERS = (
+    "تحویل مشتری",
+    "تحویل سفارش",
+    "به دست مشتری",
+    "تحویل داده شده",
+    "تحویل شده",
+    "دریافت کرده",
+    "دریافت شده",
+)
 
 _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
     IntentId.ORDER_REGISTRATION_ISSUE: SuggestedAction.ESCALATE,
@@ -59,6 +68,7 @@ _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
     IntentId.SHIPPING_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
     IntentId.RETURN_REFUND_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
     IntentId.COMPLAINT_ORDER_FOLLOWUP: SuggestedAction.HUMAN_FOLLOWUP,
+    IntentId.DELIVERY_CONFIRMATION_REQUEST: SuggestedAction.REPLY_TO_SELLER,
     IntentId.TECHNICAL_BUG_REPORT: SuggestedAction.ESCALATE,
     IntentId.GENERAL_INQUIRY: SuggestedAction.REPLY_TO_SELLER,
 }
@@ -115,6 +125,22 @@ def _is_complaint_followup_message(text: str) -> bool:
     if _looks_like_address_or_contact_block(text):
         return True
     if len(text) <= 80 and _has_any(text, ("شد", "کرد", "کردیم", "کردند", "کردم")):
+        return True
+    return False
+
+
+def _is_delivery_confirmation_message(text: str) -> bool:
+    if _has_any(text, ("لغو", "کنسل", "cancel")):
+        return False
+    if _has_any(text, _DELIVERY_CONFIRMATION_MARKERS):
+        return True
+    if "تحویل" in text and _has_any(text, ("مشتری", "خریدار", "شد", "شده", "داده")):
+        return True
+    if "رسیده" in text and _has_any(text, ("مشتری", "خریدار", "به دست")):
+        return True
+    if "دریافت" in text and _has_any(text, ("مشتری", "خریدار")):
+        return True
+    if "تایید" in text and "تحویل" in text:
         return True
     return False
 
@@ -271,6 +297,14 @@ def classify_intent_with_rules(
             0.85,
             ["شکایت", "پیگیری/وضعیت"],
             context_flags=flags,
+        )
+
+    if _is_delivery_confirmation_message(text):
+        return _build_result(
+            IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            0.85,
+            ["تحویل", "مشتری"],
+            context_flags=context_flags,
         )
 
     bank_change = _has_bank_change_context(text)

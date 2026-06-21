@@ -28,6 +28,9 @@ SETTLEMENT_INQUIRY_REPLY = (
     "درخواست شما درباره وضعیت تسویه ثبت شد و در دست بررسی قرار گرفت."
 )
 COMPLAINT_FOLLOWUP_REPLY = "درخواست شما ثبت و در دست بررسی قرار گرفت."
+DELIVERY_CONFIRMATION_REPLY = (
+    "اطلاع شما درباره تحویل سفارش ثبت شد و در دست بررسی قرار گرفت."
+)
 GENERAL_INQUIRY_REPLY = (
     "لطفاً موضوع درخواست خود را دقیق‌تر توضیح دهید تا بررسی شود."
 )
@@ -75,6 +78,8 @@ def render_template(intent_result: IntentClassificationResult) -> str:
         return SETTLEMENT_INQUIRY_REPLY
     if intent == IntentId.COMPLAINT_ORDER_FOLLOWUP:
         return COMPLAINT_FOLLOWUP_REPLY
+    if intent == IntentId.DELIVERY_CONFIRMATION_REQUEST:
+        return DELIVERY_CONFIRMATION_REPLY
     if intent == IntentId.GENERAL_INQUIRY:
         return GENERAL_INQUIRY_REPLY
 

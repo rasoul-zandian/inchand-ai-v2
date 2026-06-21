@@ -51,6 +51,31 @@ def test_bank_and_card_with_settlement_prefers_bank_account_change() -> None:
     assert IntentId.SETTLEMENT_INQUIRY in result.negative_intents
 
 
+def test_delivery_confirmation_request_examples() -> None:
+    result = classify_intent("سفارش تحویل مشتری شد")
+    assert result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST
+
+    result = classify_intent("کالا به دست مشتری رسیده")
+    assert result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST
+
+
+def test_complaint_context_delivery_followup_stays_complaint() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content=(
+                "فروشنده گرامی در مورد سفارش INC-7342409 شکایتی از فروشگاه شما ثبت شده است."
+            ),
+        ),
+    ]
+    message = "سلام وقت بخیر بسته را تحویل و هزینه برگشت را پرداخت کردن"
+
+    result = classify_intent(message, conversation_context=context)
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+    assert result.primary_intent != IntentId.DELIVERY_CONFIRMATION_REQUEST
+
+
 def test_complaint_context_with_seller_address_status_message() -> None:
     context = [
         ConversationMessage(

@@ -24,6 +24,7 @@ class IntentId(str, Enum):
     SHIPPING_INQUIRY = "shipping_inquiry"
     RETURN_REFUND_INQUIRY = "return_refund_inquiry"
     COMPLAINT_ORDER_FOLLOWUP = "complaint_order_followup"
+    DELIVERY_CONFIRMATION_REQUEST = "delivery_confirmation_request"
     TECHNICAL_BUG_REPORT = "technical_bug_report"
     GENERAL_INQUIRY = "general_inquiry"
 
@@ -147,6 +148,19 @@ INTENT_TAXONOMY: list[IntentDefinition] = [
         ),
         examples=[
             "تماس گرفته شد، قرار شد کالا برگشت داده شود و هزینه برگشت داده شود"
+        ],
+    ),
+    IntentDefinition(
+        id=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        label="Delivery confirmation request",
+        description=(
+            "Seller informs support that an order or product was delivered to the "
+            "customer, received by the customer, or delivery should be confirmed."
+        ),
+        examples=[
+            "سفارش تحویل مشتری شد",
+            "کالا به دست مشتری رسیده",
+            "لطفا تحویل سفارش را تایید کنید",
         ],
     ),
     IntentDefinition(

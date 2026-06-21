@@ -10,6 +10,7 @@ from app.reply.templates import (
     BANK_CHANGE_REQUEST_DETAILS_REPLY,
     COMPLAINT_FOLLOWUP_REPLY,
     CONTRACT_APPROVAL_REPLY,
+    DELIVERY_CONFIRMATION_REPLY,
     FORBIDDEN_ONBOARDING_PHRASES,
     ORDER_REGISTRATION_REPLY,
     PRODUCT_APPROVAL_REPLY,
@@ -53,6 +54,19 @@ def test_bank_change_with_provided_iban_does_not_request_iban_again() -> None:
 
     assert reply.text == BANK_CHANGE_REGISTERED_REPLY
     assert "لطفاً شماره شبا" not in reply.text
+
+
+def test_delivery_confirmation_reply_template() -> None:
+    intent_result = IntentClassificationResult(
+        primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        confidence=0.9,
+        evidence=["تحویل"],
+        suggested_action=SuggestedAction.REPLY_TO_SELLER,
+    )
+
+    reply = generate_reply(intent_result)
+
+    assert reply.text == DELIVERY_CONFIRMATION_REPLY
 
 
 def test_complaint_order_followup_reply_is_exact() -> None:

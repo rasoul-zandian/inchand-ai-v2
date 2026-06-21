@@ -92,6 +92,22 @@ def test_accuracy_calculation_works(monkeypatch) -> None:
     assert report.intent_accuracy == 0.5
 
 
+def test_delivery_confirmation_rows_are_evaluated_not_skipped() -> None:
+    if not WORKBOOK.exists():
+        pytest.skip("human label workbook missing")
+
+    evaluable, skipped = load_human_label_workbook(WORKBOOK)
+
+    delivery_cases = [
+        case for case in evaluable if case.expected_intent == "delivery_confirmation_request"
+    ]
+    skipped_intents = {case.expected_intent for case in skipped}
+
+    assert len(delivery_cases) == 6
+    assert "delivery_confirmation_request" not in skipped_intents
+    assert skipped_intents == {"shop_activation_request"}
+
+
 def test_empty_workbook_handled_safely() -> None:
     report = evaluate_human_labels([])
 
