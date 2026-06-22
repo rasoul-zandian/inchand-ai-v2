@@ -7,10 +7,14 @@ import json
 import sys
 from pathlib import Path
 
+_DASHBOARD_DIR = Path(__file__).resolve().parent
+if str(_DASHBOARD_DIR) not in sys.path:
+    sys.path.insert(0, str(_DASHBOARD_DIR))
+
 import pandas as pd
 import streamlit as st
 
-from dashboard.loader import (
+from loader import (
     load_jsonl,
     load_private_inputs,
     load_shadow_results,
@@ -33,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--private",
         default="reports/shadow_mode_inputs_private.jsonl",
     )
-    return parser.parse_args(argv)
+    return parser.parse_known_args(argv)
 
 
 def _load_summary(path: str, rows: list[dict]) -> dict:

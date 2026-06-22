@@ -18,6 +18,10 @@ dashboard = [
     "streamlit>=1.28",
     "pandas>=2.0",
 ]
+# Install dashboard deps without editable package:
+#   pip install streamlit pandas
+# or from repo root:
+#   pip install '.[dashboard]'
 
 [tool.pytest.ini_options]
 testpaths = ["app/tests"]

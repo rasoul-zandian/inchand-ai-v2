@@ -1,8 +1,12 @@
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
-from dashboard.loader import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dashboard"))
+
+from loader import (
     load_jsonl,
     load_private_inputs,
     merge_shadow_with_private_inputs,
