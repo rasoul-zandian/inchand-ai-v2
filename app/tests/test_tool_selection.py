@@ -3,7 +3,7 @@ from app.models.intent import IntentClassificationResult, SuggestedAction
 from app.tools.selection import ORDER_LOOKUP, IRAN_POST_TRACKING, PRODUCT_LOOKUP, select_tools
 
 
-def _intent(intent_id: IntentId, **entities: str) -> IntentClassificationResult:
+def _intent(intent_id: IntentId, **entities: str | list[str]) -> IntentClassificationResult:
     return IntentClassificationResult(
         primary_intent=intent_id,
         confidence=0.9,
@@ -69,7 +69,7 @@ def test_delivery_confirmation_with_order_ids_selects_order_lookup() -> None:
     result = select_tools(
         _intent(
             IntentId.DELIVERY_CONFIRMATION_REQUEST,
-            order_ids="INC-7338176,INC-7337206",
+            order_ids=["INC-7338176", "INC-7337206"],
         )
     )
 

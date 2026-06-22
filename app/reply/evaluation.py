@@ -4,7 +4,7 @@ from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult
 from app.models.messages import ConversationMessage
 from app.models.reply import ReplyEvaluationResult, ReplyGenerationResult
-from app.reply.templates import FORBIDDEN_ONBOARDING_PHRASES
+from app.reply.templates import FORBIDDEN_ONBOARDING_PHRASES, _entity_text_parts
 
 _MAX_REPLY_LENGTH = 350
 _BANK_DETAIL_MARKERS = ("شبا", "iban", "کارت", "card")
@@ -65,7 +65,7 @@ def _check_intent_alignment(
     reply_text = reply_result.text
 
     if intent == IntentId.BANK_ACCOUNT_CHANGE:
-        seller_text = " ".join(intent_result.evidence + list(intent_result.entities.values()))
+        seller_text = " ".join(intent_result.evidence + _entity_text_parts(intent_result))
         if _has_bank_details(seller_text) and _asks_for_bank_details(reply_text):
             _append_issue(issues, "requests_iban_already_provided")
 
@@ -111,7 +111,7 @@ def evaluate_reply(
 
     if intent_result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE:
         provided = _has_bank_details(seller_text) or _has_bank_details(
-            " ".join(intent_result.evidence + list(intent_result.entities.values()))
+            " ".join(intent_result.evidence + _entity_text_parts(intent_result))
         )
         if provided and _asks_for_bank_details(reply_text):
             _append_issue(issues, "requests_iban_already_provided")

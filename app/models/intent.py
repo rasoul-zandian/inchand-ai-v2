@@ -17,7 +17,7 @@ class IntentClassificationResult(BaseModel):
     primary_intent: IntentId
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
-    entities: dict[str, str] = Field(default_factory=dict)
+    entities: dict[str, str | list[str]] = Field(default_factory=dict)
     context_flags: list[str] = Field(default_factory=list)
     negative_intents: list[IntentId] = Field(default_factory=list)
     suggested_action: SuggestedAction

@@ -200,7 +200,7 @@ def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:
     intent = IntentClassificationResult(
         primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
         confidence=0.9,
-        entities={"order_ids": "INC-7338176,INC-7337206"},
+        entities={"order_ids": ["INC-7338176", "INC-7337206"]},
         suggested_action=SuggestedAction.REPLY_TO_SELLER,
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
@@ -231,7 +231,7 @@ def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:
     assert ORDER_LOOKUP in result.tool_selection_result.selected_tools
     assert result.order_lookup_result.executed is True
     request = captured["request"]
-    assert request.entities["order_ids"] == "INC-7338176,INC-7337206"
+    assert request.entities["order_ids"] == ["INC-7338176", "INC-7337206"]
     assert "اطلاع شما درباره تحویل سفارش دریافت شد." in result.final_reply.text
     assert "وضعیت سفارش INC-7338176: تحویل شده." in result.final_reply.text
     assert "کد رهگیری: 9876543210." in result.final_reply.text
@@ -241,7 +241,7 @@ def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypat
     intent = IntentClassificationResult(
         primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
         confidence=0.9,
-        entities={"order_ids": "INC-7338176,INC-7337206"},
+        entities={"order_ids": ["INC-7338176", "INC-7337206"]},
         suggested_action=SuggestedAction.REPLY_TO_SELLER,
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
@@ -274,5 +274,5 @@ def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypat
         lookup_fn=fake_lookup,
     )
 
-    assert captured["request"].entities["order_ids"] == "INC-7338176,INC-7337206"
+    assert captured["request"].entities["order_ids"] == ["INC-7338176", "INC-7337206"]
     assert result.order_lookup_result.tool_result.data["order_id"] == "INC-7338176"

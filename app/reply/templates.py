@@ -46,8 +46,18 @@ _BANK_DETAIL_MARKERS = ("شبا", "iban", "کارت", "card")
 _DIGIT_SEQUENCE = re.compile(r"\d{10,}")
 
 
+def _entity_text_parts(intent_result: IntentClassificationResult) -> list[str]:
+    parts: list[str] = []
+    for value in intent_result.entities.values():
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        else:
+            parts.append(str(value))
+    return parts
+
+
 def _has_bank_details_provided(intent_result: IntentClassificationResult) -> bool:
-    parts = list(intent_result.evidence) + list(intent_result.entities.values())
+    parts = list(intent_result.evidence) + _entity_text_parts(intent_result)
     for part in parts:
         lowered = part.lower()
         if any(marker in lowered for marker in _BANK_DETAIL_MARKERS):

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class ToolRequest(BaseModel):
     tool_name: str
     intent: str
-    entities: dict[str, str] = Field(default_factory=dict)
+    entities: dict[str, str | list[str]] = Field(default_factory=dict)
     context: dict[str, str] = Field(default_factory=dict)
 
 

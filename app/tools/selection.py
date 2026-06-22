@@ -37,13 +37,27 @@ _HUMAN_ONLY_INTENTS = {
 def _entity(intent_result: IntentClassificationResult, *keys: str) -> str | None:
     for key in keys:
         value = intent_result.entities.get(key)
-        if value and value.strip():
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+        elif isinstance(value, str) and value.strip():
             return value.strip()
     return None
 
 
 def _has_order_entity(intent_result: IntentClassificationResult) -> bool:
-    return _entity(intent_result, "order_id", "order_ids") is not None
+    order_id = intent_result.entities.get("order_id")
+    if isinstance(order_id, str) and order_id.strip():
+        return True
+    order_ids = intent_result.entities.get("order_ids")
+    if isinstance(order_ids, list) and any(
+        isinstance(item, str) and item.strip() for item in order_ids
+    ):
+        return True
+    if isinstance(order_ids, str) and order_ids.strip():
+        return True
+    return False
 
 
 def _skip(tool: str, reason: str) -> dict[str, str]:

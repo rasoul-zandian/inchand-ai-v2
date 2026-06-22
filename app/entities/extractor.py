@@ -7,21 +7,19 @@ from dataclasses import dataclass, field
 
 from app.models.messages import ConversationMessage
 
-_INC_ORDER_PATTERN = re.compile(r"INC[\s-]*(\d+)", re.IGNORECASE)
-_LABELED_ORDER_PATTERN = re.compile(
-    r"(?:سفارش|شماره\s+سفارش)\s*:?\s*(\d{5,})",
-    re.IGNORECASE,
-)
+EntityValue = str | list[str]
+
 _PRODUCT_PATTERN = re.compile(
     r"(?:محصول|product|شناسه\s+محصول)\s*:?\s*(\d+)",
     re.IGNORECASE,
 )
 _IBAN_PATTERN = re.compile(r"IR(\d{24})", re.IGNORECASE)
 _SHEBA_LABELED_PATTERN = re.compile(
-    r"(?:شبا|iban)\s*:?\s*(?:IR)?(\d{24})",
+    r"(?:شبا|شماره\s+شبا|iban)\s*:?\s*(?:IR)?(\d{24})",
     re.IGNORECASE,
 )
-_DIGIT_RUNS = re.compile(r"\d+")
+_INC_ORDER_PATTERN = re.compile(r"(?<!\d)INC[\s-]*(\d{7})(?!\d)", re.IGNORECASE)
+_STANDALONE_DIGITS = re.compile(r"(?<!\d)(\d+)(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -33,102 +31,118 @@ class ExtractedEntities:
     product_ids: list[str] = field(default_factory=list)
     iban: str | None = None
     card_number: str | None = None
+    mobile_number: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        entities: dict[str, str] = {}
+    def to_dict(self) -> dict[str, EntityValue]:
+        entities: dict[str, EntityValue] = {}
         if self.order_id:
             entities["order_id"] = self.order_id
-        if len(self.order_ids) > 1:
-            entities["order_ids"] = ",".join(self.order_ids)
+        if self.order_ids:
+            entities["order_ids"] = self.order_ids
         if self.tracking_code:
             entities["tracking_code"] = self.tracking_code
         if self.product_id:
             entities["product_id"] = self.product_id
         if len(self.product_ids) > 1:
-            entities["product_ids"] = ",".join(self.product_ids)
+            entities["product_ids"] = self.product_ids
         if self.iban:
             entities["iban"] = self.iban
         if self.card_number:
             entities["card_number"] = self.card_number
+        if self.mobile_number:
+            entities["mobile_number"] = self.mobile_number
         return entities
 
 
-def _normalize_order_id(raw: str) -> str:
-    digits = re.sub(r"\D", "", raw)
-    return f"INC-{digits}" if digits else raw
+@dataclass(frozen=True)
+class _Claim:
+    start: int
+    end: int
+    kind: str
+    value: str
 
 
-def _extract_order_ids(text: str) -> list[str]:
-    found: list[str] = []
-    seen: set[str] = set()
-    for pattern in (_INC_ORDER_PATTERN, _LABELED_ORDER_PATTERN):
-        for match in pattern.finditer(text):
-            normalized = _normalize_order_id(match.group(1))
-            if normalized not in seen:
-                seen.add(normalized)
-                found.append(normalized)
-    return found
+def _overlaps_claims(start: int, end: int, claims: list[_Claim]) -> bool:
+    return any(not (end <= claim.start or start >= claim.end) for claim in claims)
+
+
+def _has_sheba_label(text: str) -> bool:
+    return "شبا" in text or "شماره شبا" in text
 
 
 def _extract_product_ids(text: str) -> list[str]:
     return list(dict.fromkeys(match.group(1) for match in _PRODUCT_PATTERN.finditer(text)))
 
 
-def _extract_iban(text: str) -> str | None:
-    match = _IBAN_PATTERN.search(text)
-    if match:
-        return f"IR{match.group(1)}"
-    match = _SHEBA_LABELED_PATTERN.search(text)
-    if match:
-        return f"IR{match.group(1)}"
-    return None
+def _extract_claims(text: str) -> list[_Claim]:
+    claims: list[_Claim] = []
 
-
-def _iban_digit_spans(text: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
     for match in _IBAN_PATTERN.finditer(text):
-        spans.append(match.span())
+        claims.append(
+            _Claim(
+                match.start(),
+                match.end(),
+                "iban",
+                f"IR{match.group(1)}",
+            )
+        )
+
     for match in _SHEBA_LABELED_PATTERN.finditer(text):
-        spans.append(match.span())
-    return spans
-
-
-def _overlaps(span: tuple[int, int], spans: list[tuple[int, int]]) -> bool:
-    start, end = span
-    return any(not (end <= other_start or start >= other_end) for other_start, other_end in spans)
-
-
-def _extract_card_and_tracking(text: str, iban: str | None) -> tuple[str | None, str | None]:
-    iban_spans = _iban_digit_spans(text)
-    card_number: str | None = None
-    tracking_code: str | None = None
-    order_digits = {re.sub(r"\D", "", order_id) for order_id in _extract_order_ids(text)}
-
-    for match in _DIGIT_RUNS.finditer(text):
-        digits = match.group(0)
-        span = match.span()
-        if _overlaps(span, iban_spans):
+        if _overlaps_claims(match.start(), match.end(), claims):
             continue
-        if digits in order_digits:
+        claims.append(
+            _Claim(
+                match.start(),
+                match.end(),
+                "iban",
+                f"IR{match.group(1)}",
+            )
+        )
+
+    for match in _INC_ORDER_PATTERN.finditer(text):
+        if _overlaps_claims(match.start(), match.end(), claims):
             continue
-        if iban and digits in iban:
+        claims.append(
+            _Claim(
+                match.start(),
+                match.end(),
+                "order",
+                f"INC-{match.group(1)}",
+            )
+        )
+
+    sheba_labeled = _has_sheba_label(text)
+    for match in _STANDALONE_DIGITS.finditer(text):
+        start, end = match.span(1)
+        if _overlaps_claims(start, end, claims):
             continue
 
+        digits = match.group(1)
         length = len(digits)
-        if length == 16 and card_number is None:
-            card_number = digits
-            continue
-        if 20 <= length <= 26 and tracking_code is None:
-            tracking_code = digits
 
-    return card_number, tracking_code
+        if length == 11 and digits.startswith("09"):
+            claims.append(_Claim(start, end, "mobile", digits))
+        elif length == 16:
+            claims.append(_Claim(start, end, "card", digits))
+        elif length == 24 and sheba_labeled:
+            claims.append(_Claim(start, end, "iban", f"IR{digits}"))
+        elif 20 <= length <= 26:
+            claims.append(_Claim(start, end, "tracking", digits))
+        elif length == 7:
+            claims.append(_Claim(start, end, "order", f"INC-{digits}"))
+
+    return claims
 
 
 def _extract_from_text(text: str) -> ExtractedEntities:
-    order_ids = _extract_order_ids(text)
+    claims = _extract_claims(text)
     product_ids = _extract_product_ids(text)
-    iban = _extract_iban(text)
-    card_number, tracking_code = _extract_card_and_tracking(text, iban)
+
+    order_ids = list(dict.fromkeys(claim.value for claim in claims if claim.kind == "order"))
+    iban = next((claim.value for claim in claims if claim.kind == "iban"), None)
+    card_number = next((claim.value for claim in claims if claim.kind == "card"), None)
+    mobile_number = next((claim.value for claim in claims if claim.kind == "mobile"), None)
+    tracking_code = next((claim.value for claim in claims if claim.kind == "tracking"), None)
 
     return ExtractedEntities(
         order_id=order_ids[0] if order_ids else None,
@@ -138,6 +152,7 @@ def _extract_from_text(text: str) -> ExtractedEntities:
         product_ids=product_ids,
         iban=iban,
         card_number=card_number,
+        mobile_number=mobile_number,
     )
 
 
@@ -155,6 +170,7 @@ def _merge_entities(
         product_ids=product_ids,
         iban=primary.iban or secondary.iban,
         card_number=primary.card_number or secondary.card_number,
+        mobile_number=primary.mobile_number or secondary.mobile_number,
     )
 
 
@@ -174,6 +190,7 @@ def extract_entities(
             or not result.product_id
             or not result.iban
             or not result.card_number
+            or not result.mobile_number
         ):
             result = _merge_entities(result, backfill)
     return result

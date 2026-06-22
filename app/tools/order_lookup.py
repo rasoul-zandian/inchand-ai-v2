@@ -74,17 +74,26 @@ def _failure_result(
     )
 
 
-def _extract_order_id(entities: dict[str, str]) -> str | None:
+def _first_order_id_value(entities: dict[str, str | list[str]]) -> str | None:
     order_id = entities.get("order_id")
-    if order_id and order_id.strip():
-        return _normalize_order_id(order_id)
+    if isinstance(order_id, str) and order_id.strip():
+        return order_id.strip()
 
     order_ids = entities.get("order_ids")
-    if order_ids:
-        parts = [part.strip() for part in order_ids.split(",") if part.strip()]
-        if parts:
-            return _normalize_order_id(parts[0])
+    if isinstance(order_ids, list):
+        for value in order_ids:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    elif isinstance(order_ids, str) and order_ids.strip():
+        return order_ids.split(",")[0].strip()
 
+    return None
+
+
+def _extract_order_id(entities: dict[str, str | list[str]]) -> str | None:
+    order_id = _first_order_id_value(entities)
+    if order_id:
+        return _normalize_order_id(order_id)
     return None
 
 
