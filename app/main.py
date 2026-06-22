@@ -6,6 +6,35 @@ from app.models.messages import ConversationMessage
 from app.models.pipeline import PipelineResult
 from app.pipeline.run_pipeline import run_pipeline
 
+
+def _safe_tool_output(result: PipelineResult) -> list[dict[str, str]]:
+    outputs: list[dict[str, str]] = []
+    lookup = result.order_lookup_result
+    tool_results = lookup.results or (
+        [lookup.tool_result] if lookup.tool_result is not None else []
+    )
+    for tool_result in tool_results:
+        if tool_result is None or not tool_result.success:
+            continue
+        data = tool_result.data
+        if data.get("found") != "true":
+            continue
+        tracking = data.get("primary_parcel_tracking_code", "")
+        if "?" in tracking:
+            tracking = tracking.split("?", 1)[0]
+        outputs.append(
+            {
+                "order_id": data.get("order_id", ""),
+                "order_status": data.get("order_status", ""),
+                "parcel_status": data.get("primary_parcel_status_name", ""),
+                "tracking_code": tracking,
+                "payment_status": data.get("payment_status", ""),
+                "is_shop_scoped": data.get("is_shop_scoped", "false"),
+            }
+        )
+    return outputs
+
+
 app = FastAPI(title=settings.app_name)
 
 
@@ -40,8 +69,10 @@ class PipelineRunResponse(BaseModel):
     send_gated: bool
     final_reply: str
     final_reply_source: str
-    entities: dict[str, str]
+    entities: dict[str, str | list[str]]
     selected_tools: list[str]
+    evidence: list[str] = Field(default_factory=list)
+    safe_tool_output: list[dict[str, str]] = Field(default_factory=list)
     tool_status: ToolStatus
     warnings: list[str]
 
@@ -85,6 +116,8 @@ def _build_response(
         final_reply_source=final_reply_source,
         entities=dict(result.intent_result.entities),
         selected_tools=list(result.tool_selection_result.selected_tools),
+        evidence=list(result.intent_result.evidence),
+        safe_tool_output=_safe_tool_output(result),
         tool_status=ToolStatus(
             order_lookup_executed=order_lookup.executed,
             order_lookup_success=order_lookup_success,
