@@ -3,12 +3,41 @@ from app.models.tool_contracts import ToolRequest, ToolResult
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL, run_order_lookup
 
 
-def _request(**entities: str) -> ToolRequest:
+def _request(
+    *,
+    context: dict[str, str] | None = None,
+    **entities: str,
+) -> ToolRequest:
     return ToolRequest(
         tool_name=ORDER_LOOKUP_TOOL,
         intent="order_status_inquiry",
         entities=entities,
+        context=context or {},
     )
+
+
+_MULTI_PROVIDER_PAYLOAD = {
+    "order_status": "ارسال شده",
+    "payment_status": "موفق",
+    "providers": [
+        {
+            "shop_id": "5456",
+            "status": "ارسال شده",
+            "parcel": {
+                "status_name": "تحویل پست",
+                "tracking_code": "912660509200072100004111",
+            },
+        },
+        {
+            "shop_id": "7611",
+            "status": "ارسال شده",
+            "parcel": {
+                "status_name": "تحویل پست",
+                "tracking_code": "032930509200123380004107",
+            },
+        },
+    ],
+}
 
 
 def test_missing_order_id_returns_failure() -> None:
@@ -63,6 +92,7 @@ def test_successful_mocked_response_maps_to_tool_result() -> None:
     assert result.data["primary_provider_status"] == "shipped"
     assert result.data["primary_parcel_tracking_code"] == "1234567890"
     assert result.data["has_parcel_tracking_code"] == "true"
+    assert result.data["is_shop_scoped"] == "false"
     assert "INC-7342409" in result.summary
 
 
@@ -139,3 +169,68 @@ def test_not_found_returns_success_with_found_false() -> None:
     assert result.success is True
     assert result.data["found"] == "false"
     assert result.data["http_status"] == "404"
+
+
+def test_multi_provider_with_shop_id_selects_matching_provider() -> None:
+    def fake_fetch(_order_id: str, shop_id: str | None, _timeout: float):
+        assert shop_id == "5456"
+        return 200, _MULTI_PROVIDER_PAYLOAD
+
+    result = run_order_lookup(
+        _request(order_id="INC-7331200", context={"shop_id": "5456"}),
+        fetch_fn=fake_fetch,
+    )
+
+    assert result.success is True
+    assert result.data["is_shop_scoped"] == "true"
+    assert result.data["shop_provider_match"] == "true"
+    assert result.data["primary_provider_shop_id"] == "5456"
+    assert result.data["primary_parcel_tracking_code"] == "912660509200072100004111"
+
+
+def test_multi_provider_with_other_shop_id_selects_that_provider() -> None:
+    def fake_fetch(_order_id: str, shop_id: str | None, _timeout: float):
+        assert shop_id == "7611"
+        return 200, _MULTI_PROVIDER_PAYLOAD
+
+    result = run_order_lookup(
+        _request(order_id="INC-7331200", context={"shop_id": "7611"}),
+        fetch_fn=fake_fetch,
+    )
+
+    assert result.success is True
+    assert result.data["is_shop_scoped"] == "true"
+    assert result.data["primary_provider_shop_id"] == "7611"
+    assert result.data["primary_parcel_tracking_code"] == "032930509200123380004107"
+
+
+def test_multi_provider_without_shop_id_uses_first_provider() -> None:
+    def fake_fetch(_order_id: str, shop_id: str | None, _timeout: float):
+        assert shop_id is None
+        return 200, _MULTI_PROVIDER_PAYLOAD
+
+    result = run_order_lookup(_request(order_id="INC-7331200"), fetch_fn=fake_fetch)
+
+    assert result.success is True
+    assert result.data["is_shop_scoped"] == "false"
+    assert result.data["primary_provider_shop_id"] == "5456"
+    assert result.data["primary_parcel_tracking_code"] == "912660509200072100004111"
+    assert "shop_provider_match" not in result.data
+
+
+def test_shop_id_without_matching_provider_marks_not_found() -> None:
+    def fake_fetch(_order_id: str, _shop_id: str | None, _timeout: float):
+        return 200, _MULTI_PROVIDER_PAYLOAD
+
+    result = run_order_lookup(
+        _request(order_id="INC-7331200", context={"shop_id": "9999"}),
+        fetch_fn=fake_fetch,
+    )
+
+    assert result.success is True
+    assert result.data["order_status"] == "ارسال شده"
+    assert result.data["is_shop_scoped"] == "false"
+    assert result.data["shop_provider_match"] == "false"
+    assert result.data["provider_not_found_for_shop"] == "true"
+    assert result.data["primary_provider_shop_id"] == ""
+    assert result.data["primary_parcel_tracking_code"] == ""

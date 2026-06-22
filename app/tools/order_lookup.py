@@ -131,40 +131,83 @@ def _parcel_status_name(parcel: dict) -> str:
     return ""
 
 
-def _map_safe_order_data(order_id: str, payload: dict) -> dict[str, str]:
+def _provider_shop_id(provider: dict) -> str:
+    for key in ("shop_id", "shopId"):
+        value = provider.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _select_primary_provider(
+    providers: list[dict],
+    shop_id: str | None,
+) -> tuple[dict, bool, bool]:
+    if not providers:
+        return {}, False, True
+
+    if not shop_id:
+        primary = providers[0] if isinstance(providers[0], dict) else {}
+        return primary, False, True
+
+    for provider in providers:
+        if isinstance(provider, dict) and _provider_shop_id(provider) == shop_id:
+            return provider, True, True
+
+    return {}, False, False
+
+
+def _map_safe_order_data(
+    order_id: str,
+    payload: dict,
+    shop_id: str | None = None,
+) -> dict[str, str]:
     body = _unwrap_payload(payload)
     providers = body.get("providers") or []
     if not isinstance(providers, list):
         providers = []
 
-    primary = providers[0] if providers else {}
-    if not isinstance(primary, dict):
-        primary = {}
+    provider_dicts = [provider for provider in providers if isinstance(provider, dict)]
+    primary, is_shop_scoped, shop_provider_match = _select_primary_provider(
+        provider_dicts,
+        shop_id,
+    )
 
     parcel = primary.get("parcel") or {}
     if not isinstance(parcel, dict):
         parcel = {}
 
-    tracking_code = str(
-        parcel.get("tracking_code") or body.get("tracking_code") or ""
-    )
+    tracking_code = ""
+    if primary:
+        tracking_code = str(
+            parcel.get("tracking_code") or body.get("tracking_code") or ""
+        )
     is_delivered = body.get("is_delivered_in_inchand", body.get("is_delivered", False))
 
-    return {
+    data = {
         "order_id": order_id,
         "found": "true",
         "normalized_order_id": order_id,
         "order_status": str(body.get("order_status", body.get("status", ""))),
         "payment_status": str(body.get("payment_status", "")),
-        "provider_count": str(len(providers)),
+        "provider_count": str(len(provider_dicts)),
+        "primary_provider_shop_id": _provider_shop_id(primary),
         "primary_provider_status": str(primary.get("status", "")),
         "primary_parcel_status_name": _parcel_status_name(parcel),
         "primary_parcel_tracking_code": tracking_code,
         "has_parcel_tracking_code": "true" if tracking_code else "false",
         "is_delivered_in_inchand": str(bool(is_delivered)).lower(),
-        "providers_summary": _providers_summary(providers),
+        "is_shop_scoped": "true" if is_shop_scoped else "false",
+        "providers_summary": _providers_summary(provider_dicts),
         "response_shape_summary": _response_shape_summary(payload),
     }
+
+    if shop_id:
+        data["shop_provider_match"] = "true" if shop_provider_match else "false"
+        if not shop_provider_match:
+            data["provider_not_found_for_shop"] = "true"
+
+    return data
 
 
 def _build_summary(data: dict[str, str]) -> str:
@@ -291,7 +334,7 @@ def run_order_lookup(
         )
 
     try:
-        data = _map_safe_order_data(order_id, payload)
+        data = _map_safe_order_data(order_id, payload, shop_id=shop_id)
     except (TypeError, AttributeError) as exc:
         return _failure_result(
             error="parse_error",
