@@ -324,3 +324,98 @@ def test_support_room_product_approval_unchanged() -> None:
     )
 
     assert result.primary_intent == IntentId.PRODUCT_APPROVAL_REQUEST
+
+
+def test_thread_aware_shipping_resend_followup() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="سفارش INC-7342409 برگشت خورده دوباره ارسال بشه",
+        ),
+    ]
+    result = classify_intent_with_rules("چشم", conversation_context=context)
+
+    assert result.primary_intent == IntentId.SHIPPING_INQUIRY
+    assert "context_used" in result.evidence
+
+
+def test_thread_aware_shop_activation_followup() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="فروشگاه منو فعال کنید",
+        ),
+    ]
+    result = classify_intent_with_rules("بله", conversation_context=context)
+
+    assert result.primary_intent == IntentId.SHOP_PROFILE_UPDATE
+    assert "context_used" in result.evidence
+
+
+def test_thread_aware_product_spec_continuation() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="مشخصات فنی را اضافه بفرمایید",
+        ),
+    ]
+    result = classify_intent_with_rules(
+        "ابعاد ۱۰ در ۲۰ سانتی‌متر",
+        conversation_context=context,
+    )
+
+    assert result.primary_intent == IntentId.PRODUCT_EDIT_REQUEST
+    assert "context_used" in result.evidence
+
+
+def test_thread_aware_delivery_confirmation_with_order_ids() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="لطفا تایید کنید سفارش‌های زیر تحویل مشتری شده‌اند",
+        ),
+    ]
+    result = classify_intent_with_rules(
+        "7347247 - 7345180 - 7344196",
+        conversation_context=context,
+    )
+
+    assert result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST
+    assert "context_used" in result.evidence
+
+
+def test_thread_aware_complaint_room_stays_complaint() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="در مورد سفارش INC-7342409 شکایتی ثبت شده است",
+        ),
+    ]
+    result = classify_intent_with_rules(
+        "بله",
+        conversation_context=context,
+        room_type="complaint",
+    )
+
+    assert result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP
+
+
+def test_thread_aware_no_context_vague_stays_general() -> None:
+    result = classify_intent_with_rules("چشم")
+
+    assert result.primary_intent == IntentId.GENERAL_INQUIRY
+    assert "context_used" not in result.evidence
+
+
+def test_thread_aware_bank_in_current_not_overridden_by_context() -> None:
+    context = [
+        ConversationMessage(
+            role="assistant",
+            content="سفارش INC-7342409 برگشت خورده دوباره ارسال بشه",
+        ),
+    ]
+    message = "شماره شبا: IR800560213788805260753001"
+    result = classify_intent_with_rules(message, conversation_context=context)
+
+    assert result.primary_intent == IntentId.BANK_ACCOUNT_CHANGE
+    assert "context_used" not in result.evidence

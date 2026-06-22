@@ -95,6 +95,57 @@ _DEFAULT_ACTIONS: dict[IntentId, SuggestedAction] = {
 }
 
 
+_THREAD_MAX_MESSAGES = 10
+
+
+def _build_thread_text(
+    message: str,
+    context: list[ConversationMessage] | None,
+    *,
+    max_messages: int = _THREAD_MAX_MESSAGES,
+) -> str:
+    parts: list[str] = []
+    if context:
+        recent = context[-max_messages:]
+        for item in recent:
+            parts.append(f"{item.role}: {_normalize(item.content)}")
+    parts.append(f"user: {_normalize(message)}")
+    return " ".join(parts)
+
+
+def _current_message_has_protected_intent(text: str) -> bool:
+    if _has_any(text, _SETTLEMENT_MARKERS):
+        return True
+    if _has_contract_reference(text):
+        return True
+    if _has_bank_change_context(text) or _has_any(text, _CARD_MARKERS):
+        return True
+    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("لغو", "کنسل", "cancel")):
+        return True
+    if _has_any(text, _PRODUCT_MARKERS) and _has_any(
+        text,
+        ("تایید", "approval", "بررسی", "قیمت", "ویرایش", "edit", "رد", "rejected"),
+    ):
+        return True
+    return False
+
+
+def _apply_thread_evidence(
+    result: IntentClassificationResult,
+    *,
+    from_thread: bool,
+) -> IntentClassificationResult:
+    if not from_thread or result.primary_intent == IntentId.GENERAL_INQUIRY:
+        return result
+    evidence = list(result.evidence)
+    if "context_used" not in evidence:
+        evidence.append("context_used")
+    flags = list(result.context_flags)
+    if "context_used" not in flags:
+        flags.append("context_used")
+    return result.model_copy(update={"evidence": evidence, "context_flags": flags})
+
+
 def _normalize(text: str) -> str:
     return text.strip().lower()
 
@@ -431,20 +482,37 @@ def _apply_room_type_prior(
 def _classify_intent_core(
     message: str,
     conversation_context: list[ConversationMessage] | None = None,
+    *,
+    room_type: str | None = None,
 ) -> IntentClassificationResult:
     text = _normalize(message)
     combined = _combined_text(message, conversation_context)
     settlement_context = _has_any(combined, _SETTLEMENT_MARKERS)
     context_flags = ["settlement_context"] if settlement_context else []
 
-    if _has_contract_reference(combined) and _has_any(
-        combined, ("تایید", "شبا", "iban")
+    room = _normalize_room_type(room_type)
+    from_thread = False
+    if (
+        conversation_context
+        and not _current_message_has_protected_intent(text)
+        and room != "complaint"
     ):
-        return _build_result(
-            IntentId.CONTRACT_APPROVAL,
-            0.85,
-            ["قرارداد", "تایید/شبا"],
-            context_flags=context_flags,
+        classify_text = _normalize(_build_thread_text(message, conversation_context))
+        from_thread = True
+    else:
+        classify_text = text
+
+    if _has_contract_reference(classify_text) and _has_any(
+        classify_text, ("تایید", "شبا", "iban")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.CONTRACT_APPROVAL,
+                0.85,
+                ["قرارداد", "تایید/شبا"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
     protected = _try_protected_seller_intents(
@@ -469,145 +537,245 @@ def _classify_intent_core(
             context_flags=flags,
         )
 
-    if _is_delivery_confirmation_message(text):
-        return _build_result(
-            IntentId.DELIVERY_CONFIRMATION_REQUEST,
-            0.85,
-            ["تحویل", "مشتری"],
-            context_flags=context_flags,
+    if _is_delivery_confirmation_message(classify_text):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.DELIVERY_CONFIRMATION_REQUEST,
+                0.85,
+                ["تحویل", "مشتری"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    bank_change = _has_bank_change_context(text)
-    card_change = _has_any(text, _CARD_MARKERS)
+    bank_change = _has_bank_change_context(classify_text)
+    card_change = _has_any(classify_text, _CARD_MARKERS)
 
-    if _has_any(text, _PRODUCT_MARKERS) and ("رد" in text or "rejected" in text):
-        return _build_result(
-            IntentId.PRODUCT_REJECTION_INQUIRY,
-            0.85,
-            ["محصول", "رد"],
-            context_flags=context_flags,
+    if _has_any(classify_text, _PRODUCT_MARKERS) and (
+        "رد" in classify_text or "rejected" in classify_text
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.PRODUCT_REJECTION_INQUIRY,
+                0.85,
+                ["محصول", "رد"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, _PRODUCT_MARKERS) and _has_any(text, ("قیمت", "ویرایش", "edit", "price")):
-        return _build_result(
-            IntentId.PRODUCT_EDIT_REQUEST,
-            0.85,
-            ["محصول", "ویرایش/قیمت"],
-            context_flags=context_flags,
+    if _has_any(classify_text, _PRODUCT_MARKERS) and _has_any(
+        classify_text, ("قیمت", "ویرایش", "edit", "price")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.PRODUCT_EDIT_REQUEST,
+                0.85,
+                ["محصول", "ویرایش/قیمت"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if "آدرس" in text or "address" in text:
-        return _build_result(
-            IntentId.SHOP_ADDRESS_UPDATE,
-            0.85,
-            ["آدرس"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("مشخصات", "فنی")) and _has_any(
+        classify_text, ("اضافه", "ویرایش", "edit", "محصول", "product")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.PRODUCT_EDIT_REQUEST,
+                0.85,
+                ["مشخصات", "فنی/ویرایش"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("نام فروشگاه", "تلفن", "phone", "shop name")):
-        return _build_result(
-            IntentId.SHOP_PROFILE_UPDATE,
-            0.85,
-            ["اطلاعات فروشگاه"],
-            context_flags=context_flags,
+    if "آدرس" in classify_text or "address" in classify_text:
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.SHOP_ADDRESS_UPDATE,
+                0.85,
+                ["آدرس"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
+        )
+
+    if _has_any(classify_text, ("نام فروشگاه", "تلفن", "phone", "shop name")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.SHOP_PROFILE_UPDATE,
+                0.85,
+                ["اطلاعات فروشگاه"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
+        )
+
+    if "فروشگاه" in classify_text and _has_any(
+        classify_text, ("فعال", "غیرفعال", "activate", "deactivate")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.SHOP_PROFILE_UPDATE,
+                0.85,
+                ["فروشگاه", "فعال/غیرفعال"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
     if bank_change and card_change:
         flags = list(context_flags)
         flags.append("card_provided")
-        return _build_result(
-            IntentId.BANK_ACCOUNT_CHANGE,
-            0.85,
-            [m for m in _BANK_MARKERS + _CARD_MARKERS if m in text],
-            context_flags=flags,
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.BANK_ACCOUNT_CHANGE,
+                0.85,
+                [m for m in _BANK_MARKERS + _CARD_MARKERS if m in classify_text],
+                context_flags=flags,
+            ),
+            from_thread=from_thread,
         )
 
     if card_change:
-        return _build_result(
-            IntentId.CARD_CHANGE_REQUEST,
-            0.85,
-            ["کارت"],
-            context_flags=context_flags,
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.CARD_CHANGE_REQUEST,
+                0.85,
+                ["کارت"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
     if bank_change:
-        return _build_result(
-            IntentId.BANK_ACCOUNT_CHANGE,
-            0.85,
-            [m for m in _BANK_MARKERS if m in text],
-            context_flags=context_flags,
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.BANK_ACCOUNT_CHANGE,
+                0.85,
+                [m for m in _BANK_MARKERS if m in classify_text],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("لغو", "کنسل", "cancel")):
-        return _build_result(
-            IntentId.ORDER_CANCELLATION,
-            0.85,
-            ["سفارش", "لغو"],
-            context_flags=context_flags,
+    if _has_any(classify_text, _ORDER_MARKERS) and _has_any(
+        classify_text, ("لغو", "کنسل", "cancel")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.ORDER_CANCELLATION,
+                0.85,
+                ["سفارش", "لغو"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("وضعیت", "پیگیری", "status", "track")):
-        return _build_result(
-            IntentId.ORDER_STATUS_INQUIRY,
-            0.85,
-            ["سفارش", "وضعیت/پیگیری"],
-            context_flags=context_flags,
+    if _has_any(classify_text, _ORDER_MARKERS) and _has_any(
+        classify_text, ("وضعیت", "پیگیری", "status", "track")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.ORDER_STATUS_INQUIRY,
+                0.85,
+                ["سفارش", "وضعیت/پیگیری"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, _ORDER_MARKERS) and _has_any(text, ("ثبت", "register", "خطا", "error")):
-        return _build_result(
-            IntentId.ORDER_REGISTRATION_ISSUE,
-            0.85,
-            ["سفارش", "ثبت/خطا"],
-            context_flags=context_flags,
+    if _has_any(classify_text, _ORDER_MARKERS) and _has_any(
+        classify_text, ("ثبت", "register", "خطا", "error")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.ORDER_REGISTRATION_ISSUE,
+                0.85,
+                ["سفارش", "ثبت/خطا"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("مدارک", "آپلود", "upload", "document")):
-        return _build_result(
-            IntentId.DOCUMENT_SUBMISSION,
-            0.85,
-            ["مدارک"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("مدارک", "آپلود", "upload", "document")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.DOCUMENT_SUBMISSION,
+                0.85,
+                ["مدارک"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("ورود", "رمز", "login", "password")):
-        return _build_result(
-            IntentId.ACCOUNT_ACCESS_ISSUE,
-            0.85,
-            ["دسترسی/رمز"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("ورود", "رمز", "login", "password")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.ACCOUNT_ACCESS_ISSUE,
+                0.85,
+                ["دسترسی/رمز"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("کارمزد", "commission", "fee")):
-        return _build_result(
-            IntentId.COMMISSION_INQUIRY,
-            0.85,
-            ["کارمزد"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("کارمزد", "commission", "fee")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.COMMISSION_INQUIRY,
+                0.85,
+                ["کارمزد"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("ارسال", "پست", "shipping", "delivery")):
-        return _build_result(
-            IntentId.SHIPPING_INQUIRY,
-            0.85,
-            ["ارسال"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("ارسال", "پست", "shipping", "delivery")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.SHIPPING_INQUIRY,
+                0.85,
+                ["ارسال"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("مرجوعی", "استرداد", "refund", "return")):
-        return _build_result(
-            IntentId.RETURN_REFUND_INQUIRY,
-            0.85,
-            ["مرجوعی/استرداد"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("مرجوعی", "استرداد", "refund", "return")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.RETURN_REFUND_INQUIRY,
+                0.85,
+                ["مرجوعی/استرداد"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
-    if _has_any(text, ("باگ", "کرش", "crash", "bug")):
-        return _build_result(
-            IntentId.TECHNICAL_BUG_REPORT,
-            0.85,
-            ["باگ/کرش"],
-            context_flags=context_flags,
+    if _has_any(classify_text, ("باگ", "کرش", "crash", "bug")):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.TECHNICAL_BUG_REPORT,
+                0.85,
+                ["باگ/کرش"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
+        )
+
+    if _has_any(classify_text, _PRODUCT_MARKERS) and _has_any(
+        classify_text, ("تایید", "approval", "بررسی", "رسیدگی")
+    ):
+        return _apply_thread_evidence(
+            _build_result(
+                IntentId.PRODUCT_APPROVAL_REQUEST,
+                0.85,
+                ["محصول", "تایید/بررسی"],
+                context_flags=context_flags,
+            ),
+            from_thread=from_thread,
         )
 
     return _build_result(
@@ -634,7 +802,7 @@ def classify_intent_with_rules(
     room_type: str | None = None,
 ) -> IntentClassificationResult:
     text = _normalize(message)
-    result = _classify_intent_core(message, conversation_context)
+    result = _classify_intent_core(message, conversation_context, room_type=room_type)
     result = _apply_room_type_prior(result, text, room_type, list(result.context_flags))
     return _attach_extracted_entities(result, message, conversation_context)
 
