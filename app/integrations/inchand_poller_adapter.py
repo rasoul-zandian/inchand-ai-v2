@@ -74,3 +74,66 @@ def build_pipeline_request_from_inchand_message(
             request["conversation_context"] = converted_context
 
     return request
+
+
+def build_pipeline_request_from_inchand_room(
+    room: dict,
+    target_message_id: str | int,
+) -> dict:
+    room_id = room.get("id")
+    if room_id is None:
+        raise ValueError("missing_room_id")
+
+    messages = room.get("messages")
+    if messages is None:
+        raise ValueError("missing_messages")
+
+    if target_message_id is None or not str(target_message_id).strip():
+        raise ValueError("missing_target_id")
+
+    target_id = str(target_message_id)
+    target_message = None
+    target_index = None
+    for index, message in enumerate(messages):
+        message_id = message.get("id")
+        if message_id is not None and str(message_id) == target_id:
+            target_message = message
+            target_index = index
+            break
+
+    if target_message is None:
+        raise ValueError("missing_target_message")
+
+    sender = str(target_message.get("sender", ""))
+    if sender not in _SELLER_SENDERS:
+        raise ValueError("non_seller_message")
+
+    seller_message = _require_non_empty(target_message.get("content"), "missing_content")
+    target_msg_id = target_message.get("id")
+    if target_msg_id is None:
+        raise ValueError("missing_id")
+
+    request: dict = {
+        "seller_message": seller_message,
+        "metadata": {
+            "message_id": str(target_msg_id),
+            "room_id": str(room_id),
+        },
+    }
+
+    shop_id = room.get("shop_id")
+    if shop_id is not None:
+        request["metadata"]["shop_id"] = str(shop_id)
+
+    room_type = room.get("room_type")
+    if room_type is not None:
+        request["room_type"] = str(room_type)
+
+    if target_index > 0:
+        converted_context = [
+            _convert_context_item(message) for message in messages[:target_index]
+        ]
+        if converted_context:
+            request["conversation_context"] = converted_context
+
+    return request
