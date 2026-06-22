@@ -1,0 +1,7 @@
+
+__pycache__/
+*.pyc
+state/*.jsonl
+state/poller_state.json
+state/poller.lock
+
