@@ -37,7 +37,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--private",
         default="reports/shadow_mode_inputs_private.jsonl",
     )
-    return parser.parse_known_args(argv)
+    args, _ = parser.parse_known_args(argv)
+    return args
 
 
 def _load_summary(path: str, rows: list[dict]) -> dict:
