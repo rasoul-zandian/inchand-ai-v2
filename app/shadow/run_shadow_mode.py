@@ -37,6 +37,27 @@ def find_latest_seller_message_id(room: dict) -> str | None:
     return latest_id
 
 
+def extract_order_lookup_diagnostics(result: PipelineResult) -> dict | None:
+    order_lookup = result.order_lookup_result
+    if not order_lookup.executed or order_lookup.tool_result is None:
+        return None
+
+    tool_result = order_lookup.tool_result
+    data = tool_result.data or {}
+    diagnostics: dict[str, str | bool] = {}
+    if tool_result.error is not None:
+        diagnostics["order_lookup_error"] = tool_result.error
+    if data.get("normalized_order_id"):
+        diagnostics["normalized_order_id"] = str(data["normalized_order_id"])
+    if tool_result.error == "missing_config":
+        diagnostics["missing_config"] = True
+    if data.get("http_status"):
+        diagnostics["http_status"] = str(data["http_status"])
+    if data.get("response_shape_summary"):
+        diagnostics["response_shape_summary"] = str(data["response_shape_summary"])
+    return diagnostics or None
+
+
 def capture_shadow_result(
     result: PipelineResult,
     *,
@@ -76,6 +97,10 @@ def capture_shadow_result(
         captured["shop_id"] = shop_id
     if room_type is not None:
         captured["room_type"] = room_type
+
+    diagnostics = extract_order_lookup_diagnostics(result)
+    if diagnostics:
+        captured["order_lookup_diagnostics"] = diagnostics
     return captured
 
 
@@ -102,6 +127,15 @@ def aggregate_shadow_results(
         for warning in item["warnings"]:
             warning_counter[warning] += 1
 
+    failure_category_counter: Counter[str] = Counter()
+    for item in results:
+        if item.get("order_lookup_success") is not False:
+            continue
+        diagnostics = item.get("order_lookup_diagnostics") or {}
+        error = diagnostics.get("order_lookup_error")
+        if error:
+            failure_category_counter[str(error)] += 1
+
     return {
         "total_rooms": total_rooms,
         "processed_rooms": len(results),
@@ -121,6 +155,7 @@ def aggregate_shadow_results(
         "tool_usage_distribution": dict(tool_counter),
         "order_lookup_success_count": order_lookup_success_count,
         "order_lookup_failure_count": order_lookup_failure_count,
+        "order_lookup_failure_categories": dict(failure_category_counter),
         "top_warnings": [
             {"warning": warning, "count": count}
             for warning, count in warning_counter.most_common(10)
@@ -169,6 +204,20 @@ def build_markdown_summary(summary: dict, source_path: Path) -> str:
             "",
             f"- Success: {summary['order_lookup_success_count']}",
             f"- Failure: {summary['order_lookup_failure_count']}",
+            "",
+            "## Order lookup failure categories",
+            "",
+        ]
+    )
+    failure_categories = summary.get("order_lookup_failure_categories") or {}
+    if failure_categories:
+        for category, count in sorted(failure_categories.items()):
+            lines.append(f"- {category}: {count}")
+    else:
+        lines.append("- none")
+
+    lines.extend(
+        [
             "",
             "## Top warnings",
             "",

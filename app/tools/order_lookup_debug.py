@@ -3,33 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
-from pathlib import Path
 
-
-def _load_env_file(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-def _apply_env_to_settings() -> None:
-    from app.config import settings
-
-    settings.inchand_api_base_url = os.getenv("INCHAND_API_BASE_URL", "")
-    settings.inchand_api_key_name = os.getenv("INCHAND_API_KEY_NAME", "Authorization")
-    settings.inchand_api_key_value = os.getenv("INCHAND_API_KEY_VALUE") or os.getenv(
-        "INCHAND_INTERNAL_TOKEN", ""
-    )
-    settings.inchand_order_lookup_timeout_seconds = float(
-        os.getenv("INCHAND_ORDER_LOOKUP_TIMEOUT_SECONDS", "10")
-    )
+from app.config import settings  # noqa: F401 - loads .env on import
+from app.models.tool_contracts import ToolRequest
+from app.tools.order_lookup import ORDER_LOOKUP_TOOL, run_order_lookup
 
 
 def _safe_result(result) -> dict:
@@ -46,12 +24,6 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         print("Usage: python -m app.tools.order_lookup_debug INC-xxxx", file=sys.stderr)
         return 2
-
-    _load_env_file(Path(".env"))
-    _apply_env_to_settings()
-
-    from app.models.tool_contracts import ToolRequest
-    from app.tools.order_lookup import ORDER_LOOKUP_TOOL, run_order_lookup
 
     order_id = args[0].strip()
     request = ToolRequest(
