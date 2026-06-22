@@ -91,6 +91,7 @@ def capture_shadow_result(
         "order_lookup_executed": order_lookup.executed,
         "order_lookup_success": order_lookup_success,
         "final_reply_source": final_reply_source,
+        "final_reply": result.final_reply.text,
         "warnings": list(result.final_reply.warnings),
     }
     if shop_id is not None:
