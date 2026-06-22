@@ -39,10 +39,10 @@ def test_process_messages_creates_pending_review_records(tmp_path, monkeypatch) 
             "warnings": [],
         }
 
-    created = process_messages(messages, pipeline_fn=fake_pipeline)
-    assert len(created) == 1
-    assert created[0]["status"] == "pending_review"
-    assert created[0]["target_message_id"] == "1001"
+    result = process_messages(messages, pipeline_fn=fake_pipeline)
+    assert len(result["created"]) == 1
+    assert result["created"][0]["status"] == "pending_review"
+    assert result["created"][0]["target_message_id"] == "1001"
 
 
 def test_run_poll_once_skips_when_lock_exists(tmp_path, monkeypatch) -> None:
