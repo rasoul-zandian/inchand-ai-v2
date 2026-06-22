@@ -4,6 +4,7 @@ from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult
 from app.models.pipeline import OrderLookupExecutionResult
 from app.models.reply import ReplyGenerationResult
+from app.models.tool_contracts import ToolResult
 from app.reply.templates import COMPLAINT_FOLLOWUP_REPLY
 
 
@@ -50,6 +51,44 @@ def _build_delivery_confirmation_reply(data: dict[str, str]) -> str:
     return " ".join(parts)
 
 
+def _build_multi_delivery_confirmation_reply(data_list: list[dict[str, str]]) -> str:
+    blocks = [_build_status_reply(data) for data in data_list]
+    return "اطلاع شما درباره تحویل سفارش‌ها دریافت شد.\n\n" + "\n\n".join(blocks)
+
+
+def _build_multi_status_reply(data_list: list[dict[str, str]]) -> str:
+    return "\n\n".join(_build_status_reply(data) for data in data_list)
+
+
+def _lookup_results(
+    order_lookup_execution_result: OrderLookupExecutionResult,
+) -> list[ToolResult]:
+    if order_lookup_execution_result.results:
+        return order_lookup_execution_result.results
+    if order_lookup_execution_result.tool_result is not None:
+        return [order_lookup_execution_result.tool_result]
+    return []
+
+
+def _merge_warnings(
+    reply_result: ReplyGenerationResult,
+    order_lookup_execution_result: OrderLookupExecutionResult,
+) -> list[str]:
+    warnings = list(reply_result.warnings)
+    for warning in order_lookup_execution_result.warnings:
+        if warning not in warnings:
+            warnings.append(warning)
+    return warnings
+
+
+def _successful_lookup_data(results: list[ToolResult]) -> list[dict[str, str]]:
+    return [
+        result.data
+        for result in results
+        if result.success and result.data.get("found") == "true"
+    ]
+
+
 def enrich_reply_with_order_lookup(
     reply_result: ReplyGenerationResult,
     intent_result: IntentClassificationResult,
@@ -58,30 +97,44 @@ def enrich_reply_with_order_lookup(
     if not order_lookup_execution_result.executed:
         return reply_result
 
-    tool_result = order_lookup_execution_result.tool_result
-    if tool_result is None or not tool_result.success:
-        warnings = list(reply_result.warnings)
+    warnings = _merge_warnings(reply_result, order_lookup_execution_result)
+    results = _lookup_results(order_lookup_execution_result)
+    successful_data = _successful_lookup_data(results)
+
+    if results and not successful_data:
         if "order_lookup_failed" not in warnings:
             warnings.append("order_lookup_failed")
         return reply_result.model_copy(update={"warnings": warnings})
 
-    if intent_result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP:
-        return reply_result.model_copy(update={"text": COMPLAINT_FOLLOWUP_REPLY})
+    if results and len(successful_data) < len(results):
+        if "order_lookup_partial_failure" not in warnings:
+            warnings.append("order_lookup_partial_failure")
 
-    data = tool_result.data
-    if data.get("found") != "true":
-        return reply_result
+    if intent_result.primary_intent == IntentId.COMPLAINT_ORDER_FOLLOWUP:
+        return reply_result.model_copy(update={"text": COMPLAINT_FOLLOWUP_REPLY, "warnings": warnings})
+
+    if not successful_data:
+        return reply_result.model_copy(update={"warnings": warnings})
 
     if intent_result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST:
-        return reply_result.model_copy(
-            update={"text": _build_delivery_confirmation_reply(data)}
-        )
-
-    order_id = data.get("order_id", "")
-    if _is_delivered(data):
-        return reply_result.model_copy(update={"text": _build_delivered_reply(order_id)})
+        if len(successful_data) == 1:
+            text = _build_delivery_confirmation_reply(successful_data[0])
+        else:
+            text = _build_multi_delivery_confirmation_reply(successful_data)
+        return reply_result.model_copy(update={"text": text, "warnings": warnings})
 
     if intent_result.primary_intent == IntentId.ORDER_STATUS_INQUIRY:
-        return reply_result.model_copy(update={"text": _build_status_reply(data)})
+        if len(successful_data) == 1:
+            data = successful_data[0]
+            if _is_delivered(data):
+                text = _build_delivered_reply(data.get("order_id", ""))
+            else:
+                text = _build_status_reply(data)
+        else:
+            text = _build_multi_status_reply(successful_data)
+        return reply_result.model_copy(update={"text": text, "warnings": warnings})
+
+    if warnings != reply_result.warnings:
+        return reply_result.model_copy(update={"warnings": warnings})
 
     return reply_result

@@ -200,3 +200,146 @@ def test_delivery_confirmation_failed_lookup_keeps_generic_reply() -> None:
 
     assert result.text == DELIVERY_CONFIRMATION_REPLY
     assert "order_lookup_failed" in result.warnings
+
+
+def test_multi_order_delivery_confirmation_enrichment() -> None:
+    execution = OrderLookupExecutionResult(
+        executed=True,
+        results=[
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={
+                    "order_id": "INC-7338176",
+                    "found": "true",
+                    "order_status": "تحویل شده",
+                    "primary_parcel_status_name": "تحویل پست",
+                    "primary_parcel_tracking_code": "1111111111",
+                    "has_parcel_tracking_code": "true",
+                },
+                summary="ok",
+            ),
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={
+                    "order_id": "INC-7337206",
+                    "found": "true",
+                    "order_status": "نهایی شده",
+                    "primary_parcel_status_name": "تحویل مشتری",
+                    "primary_parcel_tracking_code": "2222222222",
+                    "has_parcel_tracking_code": "true",
+                },
+                summary="ok",
+            ),
+        ],
+        successful_count=2,
+        failed_count=0,
+    )
+
+    result = enrich_reply_with_order_lookup(
+        ReplyGenerationResult(
+            text=DELIVERY_CONFIRMATION_REPLY,
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        IntentClassificationResult(
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            confidence=0.9,
+            entities={"order_ids": ["INC-7338176", "INC-7337206"]},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        execution,
+    )
+
+    assert "اطلاع شما درباره تحویل سفارش‌ها دریافت شد." in result.text
+    assert "وضعیت سفارش INC-7338176: تحویل شده." in result.text
+    assert "وضعیت سفارش INC-7337206: نهایی شده." in result.text
+    assert "کد رهگیری: 1111111111." in result.text
+    assert "کد رهگیری: 2222222222." in result.text
+
+
+def test_partial_lookup_failure_includes_successful_orders_and_warning() -> None:
+    execution = OrderLookupExecutionResult(
+        executed=True,
+        results=[
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={
+                    "order_id": "INC-7338176",
+                    "found": "true",
+                    "order_status": "تحویل شده",
+                    "primary_parcel_status_name": "تحویل پست",
+                    "has_parcel_tracking_code": "false",
+                },
+                summary="ok",
+            ),
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=False,
+                summary="",
+                error="order_lookup_failed",
+            ),
+        ],
+        successful_count=1,
+        failed_count=1,
+    )
+
+    result = enrich_reply_with_order_lookup(
+        ReplyGenerationResult(
+            text=DELIVERY_CONFIRMATION_REPLY,
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        IntentClassificationResult(
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            confidence=0.9,
+            entities={"order_ids": ["INC-7338176", "INC-7337206"]},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        execution,
+    )
+
+    assert "وضعیت سفارش INC-7338176: تحویل شده." in result.text
+    assert "order_lookup_partial_failure" in result.warnings
+    assert "order_lookup_failed" not in result.warnings
+
+
+def test_multi_order_status_inquiry_enrichment() -> None:
+    execution = OrderLookupExecutionResult(
+        executed=True,
+        results=[
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={
+                    "order_id": "INC-7338176",
+                    "found": "true",
+                    "order_status": "ارسال شده",
+                    "primary_parcel_status_name": "تحویل پست",
+                    "has_parcel_tracking_code": "false",
+                },
+                summary="ok",
+            ),
+            ToolResult(
+                tool_name=ORDER_LOOKUP_TOOL,
+                success=True,
+                data={
+                    "order_id": "INC-7337206",
+                    "found": "true",
+                    "order_status": "ارسال شده",
+                    "primary_parcel_status_name": "تحویل مشتری",
+                    "has_parcel_tracking_code": "false",
+                },
+                summary="ok",
+            ),
+        ],
+        successful_count=2,
+        failed_count=0,
+    )
+
+    result = enrich_reply_with_order_lookup(_reply(), _intent(), execution)
+
+    assert "وضعیت سفارش INC-7338176: ارسال شده." in result.text
+    assert "وضعیت سفارش INC-7337206: ارسال شده." in result.text

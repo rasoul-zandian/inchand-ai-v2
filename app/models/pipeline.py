@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.intent import IntentClassificationResult
 from app.models.reply import (
@@ -13,6 +13,11 @@ from app.models.tool_contracts import ToolResult
 class OrderLookupExecutionResult(BaseModel):
     executed: bool
     tool_result: ToolResult | None = None
+    results: list[ToolResult] = Field(default_factory=list)
+    successful_count: int = 0
+    failed_count: int = 0
+    truncated_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PipelineResult(BaseModel):

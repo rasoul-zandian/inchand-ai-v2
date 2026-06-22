@@ -205,19 +205,21 @@ def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
 
-    captured: dict[str, object] = {}
+    calls: list[ToolRequest] = []
 
     def fake_lookup(request: ToolRequest) -> ToolResult:
-        captured["request"] = request
+        calls.append(request)
+        order_id = request.entities["order_id"]
+        tracking = "9876543210" if order_id == "INC-7338176" else "8765432109"
         return ToolResult(
             tool_name=ORDER_LOOKUP_TOOL,
             success=True,
             data={
-                "order_id": "INC-7338176",
+                "order_id": order_id,
                 "found": "true",
                 "order_status": "تحویل شده",
                 "primary_parcel_status_name": "تحویل پست",
-                "primary_parcel_tracking_code": "9876543210",
+                "primary_parcel_tracking_code": tracking,
                 "has_parcel_tracking_code": "true",
             },
             summary="ok",
@@ -225,19 +227,26 @@ def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:
 
     result = run_pipeline(
         "سلام سفارش های INC-7338176 - INC-7337206 تحویل داده شدند",
+        metadata={"shop_id": "5456"},
         lookup_fn=fake_lookup,
     )
 
     assert ORDER_LOOKUP in result.tool_selection_result.selected_tools
     assert result.order_lookup_result.executed is True
-    request = captured["request"]
-    assert request.entities["order_ids"] == ["INC-7338176", "INC-7337206"]
-    assert "اطلاع شما درباره تحویل سفارش دریافت شد." in result.final_reply.text
+    assert len(calls) == 2
+    assert all(call.context["shop_id"] == "5456" for call in calls)
+    assert [call.entities["order_id"] for call in calls] == [
+        "INC-7338176",
+        "INC-7337206",
+    ]
+    assert "اطلاع شما درباره تحویل سفارش‌ها دریافت شد." in result.final_reply.text
     assert "وضعیت سفارش INC-7338176: تحویل شده." in result.final_reply.text
+    assert "وضعیت سفارش INC-7337206: تحویل شده." in result.final_reply.text
     assert "کد رهگیری: 9876543210." in result.final_reply.text
+    assert "کد رهگیری: 8765432109." in result.final_reply.text
 
 
-def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypatch) -> None:
+def test_delivery_confirmation_multiple_order_ids_looks_up_each_order(monkeypatch) -> None:
     intent = IntentClassificationResult(
         primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
         confidence=0.9,
@@ -246,12 +255,12 @@ def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypat
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
 
-    captured: dict[str, object] = {}
+    calls: list[ToolRequest] = []
 
     def fake_lookup(request: ToolRequest) -> ToolResult:
         from app.tools.order_lookup import run_order_lookup
 
-        captured["request"] = request
+        calls.append(request)
         return run_order_lookup(request, fetch_fn=lambda order_id, _shop_id, _timeout: (
             200,
             {
@@ -259,10 +268,12 @@ def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypat
                     "order_status": "ارسال شده",
                     "providers": [
                         {
+                            "shop_id": request.context.get("shop_id", "5456"),
+                            "status": "ارسال شده",
                             "parcel": {
                                 "status_name": "تحویل پست",
-                                "tracking_code": "1111111111",
-                            }
+                                "tracking_code": f"track-{order_id}",
+                            },
                         }
                     ],
                 }
@@ -271,8 +282,11 @@ def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypat
 
     result = run_pipeline(
         "سلام سفارش های INC-7338176 - INC-7337206 تحویل داده شدند",
+        metadata={"shop_id": "5456"},
         lookup_fn=fake_lookup,
     )
 
-    assert captured["request"].entities["order_ids"] == ["INC-7338176", "INC-7337206"]
-    assert result.order_lookup_result.tool_result.data["order_id"] == "INC-7338176"
+    assert len(calls) == 2
+    assert result.order_lookup_result.successful_count == 2
+    assert "وضعیت سفارش INC-7338176" in result.final_reply.text
+    assert "وضعیت سفارش INC-7337206" in result.final_reply.text
