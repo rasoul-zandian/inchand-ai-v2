@@ -194,3 +194,85 @@ def test_delivered_order_final_reply(monkeypatch) -> None:
         result.final_reply.text
         == "وضعیت سفارش INC-7342409 در وضعیت تحویل شده قرار دارد."
     )
+
+
+def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:
+    intent = IntentClassificationResult(
+        primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        confidence=0.9,
+        entities={"order_ids": "INC-7338176,INC-7337206"},
+        suggested_action=SuggestedAction.REPLY_TO_SELLER,
+    )
+    monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
+
+    captured: dict[str, object] = {}
+
+    def fake_lookup(request: ToolRequest) -> ToolResult:
+        captured["request"] = request
+        return ToolResult(
+            tool_name=ORDER_LOOKUP_TOOL,
+            success=True,
+            data={
+                "order_id": "INC-7338176",
+                "found": "true",
+                "order_status": "تحویل شده",
+                "primary_parcel_status_name": "تحویل پست",
+                "primary_parcel_tracking_code": "9876543210",
+                "has_parcel_tracking_code": "true",
+            },
+            summary="ok",
+        )
+
+    result = run_pipeline(
+        "سلام سفارش های INC-7338176 - INC-7337206 تحویل داده شدند",
+        lookup_fn=fake_lookup,
+    )
+
+    assert ORDER_LOOKUP in result.tool_selection_result.selected_tools
+    assert result.order_lookup_result.executed is True
+    request = captured["request"]
+    assert request.entities["order_ids"] == "INC-7338176,INC-7337206"
+    assert "اطلاع شما درباره تحویل سفارش دریافت شد." in result.final_reply.text
+    assert "وضعیت سفارش INC-7338176: تحویل شده." in result.final_reply.text
+    assert "کد رهگیری: 9876543210." in result.final_reply.text
+
+
+def test_delivery_confirmation_multiple_order_ids_uses_first_in_lookup(monkeypatch) -> None:
+    intent = IntentClassificationResult(
+        primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        confidence=0.9,
+        entities={"order_ids": "INC-7338176,INC-7337206"},
+        suggested_action=SuggestedAction.REPLY_TO_SELLER,
+    )
+    monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
+
+    captured: dict[str, object] = {}
+
+    def fake_lookup(request: ToolRequest) -> ToolResult:
+        from app.tools.order_lookup import run_order_lookup
+
+        captured["request"] = request
+        return run_order_lookup(request, fetch_fn=lambda order_id, _shop_id, _timeout: (
+            200,
+            {
+                "data": {
+                    "order_status": "ارسال شده",
+                    "providers": [
+                        {
+                            "parcel": {
+                                "status_name": "تحویل پست",
+                                "tracking_code": "1111111111",
+                            }
+                        }
+                    ],
+                }
+            },
+        ))
+
+    result = run_pipeline(
+        "سلام سفارش های INC-7338176 - INC-7337206 تحویل داده شدند",
+        lookup_fn=fake_lookup,
+    )
+
+    assert captured["request"].entities["order_ids"] == "INC-7338176,INC-7337206"
+    assert result.order_lookup_result.tool_result.data["order_id"] == "INC-7338176"

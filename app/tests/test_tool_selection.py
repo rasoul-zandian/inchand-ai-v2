@@ -54,3 +54,24 @@ def test_complaint_followup_with_order_id_selects_order_lookup() -> None:
 
     assert result.selected_tools == [ORDER_LOOKUP]
     assert not result.requires_human_followup
+
+
+def test_delivery_confirmation_with_order_id_selects_order_lookup() -> None:
+    result = select_tools(
+        _intent(IntentId.DELIVERY_CONFIRMATION_REQUEST, order_id="INC-7338176")
+    )
+
+    assert result.selected_tools == [ORDER_LOOKUP]
+    assert not result.requires_human_followup
+
+
+def test_delivery_confirmation_with_order_ids_selects_order_lookup() -> None:
+    result = select_tools(
+        _intent(
+            IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            order_ids="INC-7338176,INC-7337206",
+        )
+    )
+
+    assert result.selected_tools == [ORDER_LOOKUP]
+    assert not result.requires_human_followup

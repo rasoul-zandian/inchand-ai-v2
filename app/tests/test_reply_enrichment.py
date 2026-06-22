@@ -4,7 +4,7 @@ from app.models.pipeline import OrderLookupExecutionResult
 from app.models.reply import ReplyGenerationResult
 from app.models.tool_contracts import ToolResult
 from app.reply.enrichment import enrich_reply_with_order_lookup
-from app.reply.templates import COMPLAINT_FOLLOWUP_REPLY, DEFAULT_REGISTERED_REPLY
+from app.reply.templates import COMPLAINT_FOLLOWUP_REPLY, DEFAULT_REGISTERED_REPLY, DELIVERY_CONFIRMATION_REPLY
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
 
 
@@ -130,3 +130,73 @@ def test_complaint_followup_stays_neutral_when_lookup_succeeded() -> None:
 
     assert result.text == COMPLAINT_FOLLOWUP_REPLY
     assert "کد رهگیری" not in result.text
+
+
+def test_delivery_confirmation_enriches_reply_with_order_status() -> None:
+    execution = OrderLookupExecutionResult(
+        executed=True,
+        tool_result=ToolResult(
+            tool_name=ORDER_LOOKUP_TOOL,
+            success=True,
+            data={
+                "order_id": "INC-7338176",
+                "found": "true",
+                "order_status": "تحویل شده",
+                "primary_parcel_status_name": "تحویل پست",
+                "primary_parcel_tracking_code": "1234567890",
+                "has_parcel_tracking_code": "true",
+            },
+            summary="ok",
+        ),
+    )
+
+    result = enrich_reply_with_order_lookup(
+        ReplyGenerationResult(
+            text=DELIVERY_CONFIRMATION_REPLY,
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        IntentClassificationResult(
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            confidence=0.9,
+            entities={"order_id": "INC-7338176"},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        execution,
+    )
+
+    assert "اطلاع شما درباره تحویل سفارش دریافت شد." in result.text
+    assert "وضعیت سفارش INC-7338176: تحویل شده." in result.text
+    assert "وضعیت مرسوله: تحویل پست." in result.text
+    assert "کد رهگیری: 1234567890." in result.text
+
+
+def test_delivery_confirmation_failed_lookup_keeps_generic_reply() -> None:
+    original = ReplyGenerationResult(
+        text=DELIVERY_CONFIRMATION_REPLY,
+        primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        suggested_action=SuggestedAction.REPLY_TO_SELLER,
+    )
+    execution = OrderLookupExecutionResult(
+        executed=True,
+        tool_result=ToolResult(
+            tool_name=ORDER_LOOKUP_TOOL,
+            success=False,
+            summary="",
+            error="order_lookup_failed",
+        ),
+    )
+
+    result = enrich_reply_with_order_lookup(
+        original,
+        IntentClassificationResult(
+            primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+            confidence=0.9,
+            entities={"order_id": "INC-7338176"},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        execution,
+    )
+
+    assert result.text == DELIVERY_CONFIRMATION_REPLY
+    assert "order_lookup_failed" in result.warnings

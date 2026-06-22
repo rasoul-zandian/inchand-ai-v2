@@ -33,6 +33,23 @@ def _build_status_reply(data: dict[str, str]) -> str:
     return " ".join(parts)
 
 
+def _build_delivery_confirmation_reply(data: dict[str, str]) -> str:
+    order_id = data.get("order_id", "")
+    order_status = data.get("order_status", "")
+    parts = ["اطلاع شما درباره تحویل سفارش دریافت شد."]
+    parts.append(f"وضعیت سفارش {order_id}: {order_status}.")
+
+    parcel_status = data.get("primary_parcel_status_name", "")
+    if parcel_status:
+        parts.append(f"وضعیت مرسوله: {parcel_status}.")
+
+    tracking_code = data.get("primary_parcel_tracking_code", "")
+    if tracking_code and data.get("has_parcel_tracking_code", "").lower() == "true":
+        parts.append(f"کد رهگیری: {tracking_code}.")
+
+    return " ".join(parts)
+
+
 def enrich_reply_with_order_lookup(
     reply_result: ReplyGenerationResult,
     intent_result: IntentClassificationResult,
@@ -54,6 +71,11 @@ def enrich_reply_with_order_lookup(
     data = tool_result.data
     if data.get("found") != "true":
         return reply_result
+
+    if intent_result.primary_intent == IntentId.DELIVERY_CONFIRMATION_REQUEST:
+        return reply_result.model_copy(
+            update={"text": _build_delivery_confirmation_reply(data)}
+        )
 
     order_id = data.get("order_id", "")
     if _is_delivered(data):

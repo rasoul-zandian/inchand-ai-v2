@@ -42,6 +42,10 @@ def _entity(intent_result: IntentClassificationResult, *keys: str) -> str | None
     return None
 
 
+def _has_order_entity(intent_result: IntentClassificationResult) -> bool:
+    return _entity(intent_result, "order_id", "order_ids") is not None
+
+
 def _skip(tool: str, reason: str) -> dict[str, str]:
     return {"tool": tool, "reason": reason}
 
@@ -93,6 +97,13 @@ def select_tools(
             skipped.append(_skip(PRODUCT_LOOKUP, "product_id_missing"))
             requires_human = True
             reason = "product_id missing for product-related intent"
+
+    elif intent == IntentId.DELIVERY_CONFIRMATION_REQUEST:
+        if _has_order_entity(intent_result):
+            selected.append(ORDER_LOOKUP)
+            reason = "order_id present for delivery confirmation"
+        else:
+            reason = "no order_id for delivery confirmation"
 
     elif intent in _HUMAN_ONLY_INTENTS:
         requires_human = True
