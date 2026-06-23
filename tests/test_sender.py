@@ -3,7 +3,13 @@ from unittest.mock import patch
 
 import pytest
 
-from hitl.sender import build_suggestion_content, parse_refer_to, send_reply, send_suggestion
+from hitl.sender import (
+    _create_message_url,
+    build_suggestion_content,
+    parse_refer_to,
+    send_reply,
+    send_suggestion,
+)
 
 
 def _record() -> dict:
@@ -78,3 +84,21 @@ def test_send_reply_api_failure() -> None:
     result = send_reply(_record(), request_fn=fake_request)
     assert result["success"] is False
     assert result["error"] == "api_failure"
+
+
+def test_create_message_url_internal_base(monkeypatch) -> None:
+    monkeypatch.setenv("INCHAND_API_BASE_URL", "https://app.inchand.com/api/v1/internal")
+    monkeypatch.delenv("HITL_INCHAND_CREATE_MESSAGE_PATH", raising=False)
+    assert (
+        _create_message_url()
+        == "https://app.inchand.com/api/v1/internal/message/create"
+    )
+
+
+def test_create_message_url_host_base(monkeypatch) -> None:
+    monkeypatch.setenv("INCHAND_API_BASE_URL", "https://app.inchand.com")
+    monkeypatch.delenv("HITL_INCHAND_CREATE_MESSAGE_PATH", raising=False)
+    assert (
+        _create_message_url()
+        == "https://app.inchand.com/api/v1/internal/message/create"
+    )

@@ -16,6 +16,43 @@ SEND_TIMEOUT_SECONDS = 10.0
 RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
+def _log(message: str) -> None:
+    print(message, flush=True)
+
+
+def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
+    safe: dict[str, str] = {}
+    auth_name = settings.inchand_api_key_name
+    for key, value in headers.items():
+        if key == auth_name or key.lower() in {"authorization", "x-api-key"}:
+            safe[key] = "***"
+        else:
+            safe[key] = value
+    return safe
+
+
+def _log_send_request(
+    *,
+    url: str,
+    method: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> None:
+    _log("SEND REQUEST")
+    _log(f"URL: {url}")
+    _log(f"METHOD: {method}")
+    _log("HEADERS:")
+    _log(json.dumps(_safe_headers(headers), ensure_ascii=False, indent=2))
+    _log("PAYLOAD:")
+    _log(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _log_send_response(*, status: int, body: str) -> None:
+    _log("RESPONSE:")
+    _log(f"status={status}")
+    _log(f"body={body}")
+
+
 def parse_refer_to(value: str | int | None) -> int | None:
     if value is None:
         return None
@@ -29,13 +66,33 @@ def parse_refer_to(value: str | int | None) -> int | None:
     return int(text)
 
 
+def _create_message_endpoint() -> str:
+    explicit = os.getenv("HITL_INCHAND_CREATE_MESSAGE_PATH")
+    if explicit:
+        return explicit
+    base = os.getenv("INCHAND_API_BASE_URL", "").rstrip("/")
+    if base.endswith("/api/v1/internal"):
+        return "/message/create"
+    return "/api/v1/internal/message/create"
+
+
 def _create_message_url() -> str:
     base = os.getenv("INCHAND_API_BASE_URL", "").rstrip("/")
-    path = os.getenv(
-        "HITL_INCHAND_CREATE_MESSAGE_PATH",
-        "/api/v1/internal/message/create",
-    )
+    path = _create_message_endpoint()
+    if not path.startswith("/"):
+        path = f"/{path}"
     return f"{base}{path}"
+
+
+_create_message_url_logged = False
+
+
+def _log_create_message_url_once() -> None:
+    global _create_message_url_logged
+    if _create_message_url_logged:
+        return
+    _log(f"Create Message URL:\n{_create_message_url()}")
+    _create_message_url_logged = True
 
 
 def build_suggestion_content(record: dict[str, Any]) -> str:
@@ -64,15 +121,18 @@ def _default_request(
     if not settings.inchand_api_key_value:
         raise RuntimeError("missing_token")
 
+    _log_create_message_url_once()
     url = _create_message_url()
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        settings.inchand_api_key_name: settings.inchand_api_key_value,
+        "Content-Type": "application/json",
+    }
+    _log_send_request(url=url, method="POST", headers=headers, payload=payload)
     request = urllib.request.Request(
         url,
         data=body,
-        headers={
-            settings.inchand_api_key_name: settings.inchand_api_key_value,
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -84,6 +144,8 @@ def _default_request(
         raw = exc.read().decode("utf-8", errors="replace")
     except TimeoutError as exc:
         raise TimeoutError("timeout") from exc
+
+    _log_send_response(status=status, body=raw)
 
     try:
         parsed = json.loads(raw) if raw else {}
