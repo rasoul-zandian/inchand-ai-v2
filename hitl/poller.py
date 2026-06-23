@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 from app.integrations.inchand_poller_adapter import build_pipeline_request_from_inchand_message
 
+import app.config  # noqa: F401 — load .env for poller CLI
+
 from hitl.jalali import to_jalali
 from hitl.state import (
     acquire_poller_lock,
@@ -40,12 +42,24 @@ def _log(message: str) -> None:
     print(message, flush=True)
 
 
+def _messages_endpoint() -> str:
+    explicit = os.getenv("INCHAND_MESSAGES_ENDPOINT")
+    if explicit:
+        return explicit
+    legacy = os.getenv("HITL_INCHAND_MESSAGES_PATH")
+    if legacy:
+        return legacy
+    base = os.getenv("INCHAND_API_BASE_URL", "").rstrip("/")
+    if base.endswith("/api/v1/internal"):
+        return "/messages"
+    return "/api/v1/internal/messages"
+
+
 def _messages_url() -> str:
     base = os.getenv("INCHAND_API_BASE_URL", "").rstrip("/")
-    path = os.getenv(
-        "HITL_INCHAND_MESSAGES_PATH",
-        "/api/v1/internal/messages",
-    )
+    path = _messages_endpoint()
+    if not path.startswith("/"):
+        path = f"/{path}"
     return f"{base}{path}"
 
 
@@ -60,6 +74,11 @@ def _auth_token() -> str:
     return os.getenv("INCHAND_INTERNAL_TOKEN") or os.getenv("INCHAND_API_KEY_VALUE", "")
 
 
+def _fetch_configured() -> bool:
+    base = os.getenv("INCHAND_API_BASE_URL", "")
+    return bool(_auth_token() and base.startswith("http"))
+
+
 def _cursor_query(cursor_type: str, cursor_value: str | None) -> dict[str, str]:
     if not cursor_value:
         return {}
@@ -67,7 +86,18 @@ def _cursor_query(cursor_type: str, cursor_value: str | None) -> dict[str, str]:
         return {"after_id": cursor_value}
     if cursor_type == "after_timestamp":
         return {"after_timestamp": cursor_value}
-    return {"after_message_id": cursor_value}
+    param = os.getenv("INCHAND_MESSAGES_CURSOR_PARAM", "after_message_id")
+    return {param: cursor_value}
+
+
+def _parse_messages_response(payload: Any) -> list[dict[str, Any]] | None:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        data = payload.get("data", payload.get("messages"))
+        if isinstance(data, list):
+            return data
+    return None
 
 
 def _log_fetch_error(category: str, detail: str = "") -> None:
@@ -90,28 +120,37 @@ def fetch_new_messages(
     if fetch_fn is not None:
         return fetch_fn(state)
 
-    token = _auth_token()
-    base_url = _messages_url()
-    if not token or not base_url.startswith("http"):
+    if not _fetch_configured():
         _log("fetch_new_messages not configured")
         return []
 
     params = {"limit": str(limit), **_cursor_query(cursor_type, cursor_value)}
-    url = f"{base_url}?{urllib.parse.urlencode(params)}"
+    url = f"{_messages_url()}?{urllib.parse.urlencode(params)}"
+    path = urllib.parse.urlparse(url).path
+    _log(f"fetch path: {path}")
+    _log(f"cursor before: {cursor_value}")
+
     request = urllib.request.Request(
         url,
-        headers={"Authorization": token},
+        headers={"Authorization": _auth_token()},
         method="GET",
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read().decode("utf-8")
+            status = getattr(response, "status", 200)
     except TimeoutError:
         _log_fetch_error("timeout")
+        return []
+    except urllib.error.HTTPError as exc:
+        _log(f"fetch http status: {exc.code}")
+        _log_fetch_error("http_error", str(exc.code))
         return []
     except urllib.error.URLError as exc:
         _log_fetch_error("network_error", type(exc).__name__)
         return []
+
+    _log(f"fetch http status: {status}")
 
     try:
         payload = json.loads(raw)
@@ -119,14 +158,13 @@ def fetch_new_messages(
         _log_fetch_error("invalid_json")
         return []
 
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        data = payload.get("data", payload.get("messages", []))
-        if isinstance(data, list):
-            return data
-    _log_fetch_error("unexpected_response_shape")
-    return []
+    messages = _parse_messages_response(payload)
+    if messages is None:
+        _log_fetch_error("unexpected_response_shape")
+        return []
+
+    _log(f"fetched count: {len(messages)}")
+    return messages
 
 
 def load_messages_from_file(path: str) -> list[dict[str, Any]]:
@@ -263,6 +301,21 @@ def build_review_record(
     }
 
 
+def _message_id_sort_key(message_id: Any) -> tuple[int, int | str]:
+    text = str(message_id)
+    if text.isdigit():
+        return (0, int(text))
+    return (1, text)
+
+
+def _max_message_id(messages: list[dict[str, Any]]) -> str | None:
+    with_ids = [message for message in messages if message.get("id") is not None]
+    if not with_ids:
+        return None
+    best = max(with_ids, key=lambda message: _message_id_sort_key(message["id"]))
+    return str(best["id"])
+
+
 def _update_cursor(
     poller_state: dict[str, Any],
     messages: list[dict[str, Any]],
@@ -271,14 +324,14 @@ def _update_cursor(
         return poller_state
 
     cursor_type = str(poller_state.get("cursor_type", "after_message_id"))
-    last = messages[-1]
     updated = dict(poller_state)
     if cursor_type == "after_timestamp":
+        last = max(messages, key=lambda item: str(item.get("created_at", "")))
         updated["cursor_value"] = str(last.get("created_at", last.get("id", "")))
-    elif cursor_type == "after_id":
-        updated["cursor_value"] = str(last.get("id", ""))
+    elif cursor_type in {"after_id", "after_message_id"}:
+        updated["cursor_value"] = _max_message_id(messages)
     else:
-        updated["cursor_value"] = str(last.get("id", ""))
+        updated["cursor_value"] = _max_message_id(messages)
     updated["last_poll_at"] = datetime.now(timezone.utc).isoformat()
     return updated
 
@@ -396,6 +449,7 @@ def _print_poll_summary(summary: dict[str, Any]) -> None:
     _log(f"processed count: {summary.get('processed_count', 0)}")
     _log(f"error count: {summary.get('error_count', 0)}")
     _log(f"created record count: {summary.get('created', 0)}")
+    _log(f"cursor before: {summary.get('cursor_before')}")
     _log(f"new cursor_value: {summary.get('cursor_value')}")
 
 
@@ -412,6 +466,7 @@ def run_poll_once(
 
     try:
         poller_state = load_poller_state()
+        cursor_before = poller_state.get("cursor_value")
         messages = fetch_new_messages(poller_state, fetch_fn=fetch_fn)
         result = process_messages(messages, pipeline_fn=pipeline_fn)
         updated_state = _update_cursor(poller_state, messages)
@@ -425,6 +480,7 @@ def run_poll_once(
             "error_count": result["error_count"],
             "ignored_sender_count": result["ignored_sender_count"],
             "processed_count": result["processed_count"],
+            "cursor_before": cursor_before,
             "cursor_value": updated_state.get("cursor_value"),
         }
     finally:
