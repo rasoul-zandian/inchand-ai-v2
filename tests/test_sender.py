@@ -5,6 +5,8 @@ import pytest
 
 from hitl.sender import (
     _create_message_url,
+    build_admin_suggestion_content,
+    build_admin_suggestion_meta,
     build_suggestion_content,
     parse_refer_to,
     send_reply,
@@ -12,19 +14,39 @@ from hitl.sender import (
 )
 
 
-def _record() -> dict:
-    return {
+def _record(**overrides) -> dict:
+    record = {
         "record_id": "48423:202375",
         "room_id": "48423",
+        "target_message_id": "202375",
+        "seller_message": "سلام، وضعیت سفارش INC-7342409 را لطفاً بررسی کنید.",
         "pipeline": {
             "final_reply": "پاسخ نهایی",
             "primary_intent": "shipping_inquiry",
             "confidence": 0.87,
             "suggested_action": "reply_to_seller",
             "final_reply_source": "template",
+            "needs_human_review": False,
+            "should_send": True,
             "entities": {"order_id": "INC-7342409"},
+            "selected_tools": ["order_lookup", "iran_post_tracking"],
+            "tool_status": {
+                "order_lookup_executed": True,
+                "order_lookup_success": True,
+            },
+            "warnings": [],
         },
+        "tool_output": [
+            {
+                "order_id": "INC-7342409",
+                "order_status": "ارسال شده",
+                "parcel_status": "تحویل مرسوله",
+                "tracking_code": "596760509400015050005114",
+            }
+        ],
     }
+    record.update(overrides)
+    return record
 
 
 def test_parse_refer_to_empty_and_integer() -> None:
@@ -53,12 +75,65 @@ def test_send_reply_success() -> None:
 
 
 def test_send_suggestion_success() -> None:
+    captured: dict = {}
+
     def fake_request(payload, timeout=10):
+        captured["payload"] = payload
         return 200, {"id": 556}
 
     result = send_suggestion(_record(), request_fn=fake_request)
     assert result["success"] is True
-    assert "shipping_inquiry" in build_suggestion_content(_record())
+    assert captured["payload"]["type"] == 3
+    assert "AI intent=" not in captured["payload"]["content"]
+    assert captured["payload"]["meta"]["message_kind"] == "ai_admin_suggestion"
+
+
+def test_build_admin_suggestion_content_persian_card() -> None:
+    content = build_admin_suggestion_content(_record())
+
+    assert "AI intent=" not in content
+    assert "🤖 پیشنهاد هوش مصنوعی برای ادمین" in content
+    assert "پیگیری ارسال / مرسوله" in content
+    assert "قابل پاسخ به فروشنده" in content
+    assert "ابزارهای استفاده‌شده" in content
+    assert "✓ جستجوی سفارش" in content
+    assert "سفارش: INC-7342409" in content
+    assert "<script" not in content
+
+
+def test_build_admin_suggestion_content_shows_warnings() -> None:
+    record = _record()
+    record["pipeline"] = {**record["pipeline"], "warnings": ["missing_tracking_code"]}
+    record["warnings"] = ["tool_timeout"]
+
+    content = build_admin_suggestion_content(record)
+
+    assert "هشدارها" in content
+    assert "missing_tracking_code" in content
+    assert "tool_timeout" in content
+
+
+def test_build_admin_suggestion_meta_fields() -> None:
+    meta = build_admin_suggestion_meta(_record())
+
+    assert meta["source"] == "inchand_ai_v2"
+    assert meta["mode"] == "live_hitl"
+    assert meta["message_kind"] == "ai_admin_suggestion"
+    assert meta["record_id"] == "48423:202375"
+    assert meta["room_id"] == "48423"
+    assert meta["target_message_id"] == "202375"
+    assert meta["primary_intent"] == "shipping_inquiry"
+    assert meta["confidence"] == 0.87
+    assert meta["suggested_action"] == "reply_to_seller"
+    assert meta["needs_human_review"] is False
+    assert meta["should_send"] is True
+    assert meta["entities"] == {"order_id": "INC-7342409"}
+    assert meta["selected_tools"] == ["order_lookup", "iran_post_tracking"]
+    assert meta["final_reply_source"] == "template"
+
+
+def test_build_suggestion_content_alias() -> None:
+    assert build_suggestion_content(_record()) == build_admin_suggestion_content(_record())
 
 
 def test_send_reply_missing_token() -> None:
