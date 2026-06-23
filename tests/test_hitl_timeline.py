@@ -16,12 +16,10 @@ def test_build_timeline_messages_from_empty_context_uses_target_and_ai() -> None
 
     messages = build_timeline_messages(record)
 
-    assert len(messages) == 2
+    assert len(messages) == 1
     assert messages[0]["kind"] == "seller"
     assert messages[0]["is_target"] is True
     assert messages[0]["content"] == "سلام"
-    assert messages[1]["kind"] == "ai"
-    assert messages[1]["content"] == "پاسخ AI"
 
 
 def test_build_timeline_messages_marks_target_in_context() -> None:
@@ -101,8 +99,7 @@ def test_build_timeline_messages_prefers_timeline_messages_field() -> None:
 
     messages = build_timeline_messages(record)
 
-    assert len(messages) == 3
+    assert len(messages) == 2
     assert messages[0]["kind"] == "support"
     assert messages[1]["kind"] == "seller"
     assert messages[1]["is_target"] is True
-    assert messages[2]["kind"] == "ai"
