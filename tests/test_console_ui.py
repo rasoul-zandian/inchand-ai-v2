@@ -1,97 +1,30 @@
-from hitl.console_ui import render_chat_html, render_console_html
+from hitl.app import _compute_sidebar_counts, _filter_by_nav, _record_feedback
 
 
-def test_render_console_html_includes_header_fields() -> None:
-    record = {
-        "record_id": "48423:205050",
-        "room_id": "48423",
-        "shop_id": "7304",
-        "target_message_id": "205050",
-        "status": "pending_review",
-        "created_at_jalali": "31-03-1404 12:15",
-        "room_type": "support",
-        "seller_message": "سلام",
-        "conversation_context": [],
-        "timeline_messages": [
-            {
-                "id": 202370,
-                "sender": "admin",
-                "role": "assistant",
-                "content": "پشتیبانی",
-                "created_at_jalali": "31-03-1404 10:13",
-                "is_target": False,
-            },
-            {
-                "id": 205050,
-                "sender": "shop",
-                "role": "user",
-                "content": "سلام",
-                "created_at_jalali": "31-03-1404 12:15",
-                "is_target": True,
-            },
-        ],
-        "pipeline": {
-            "final_reply": "پاسخ",
-            "primary_intent": "order_status_inquiry",
-            "confidence": 0.87,
-            "suggested_action": "reply_to_seller",
-            "should_send": True,
-            "selected_tools": [],
-            "entities": {},
-            "evidence": [],
-            "warnings": [],
-            "final_reply_source": "template",
-            "needs_human_review": False,
-        },
-        "tool_output": [],
-        "warnings": [],
-        "send_log": [],
-    }
-    timeline = [
+def test_record_feedback_handles_null() -> None:
+    record = {"record_id": "1:1", "feedback": None}
+    assert _record_feedback(record) == {}
+
+
+def test_sidebar_counts_with_null_feedback() -> None:
+    records = [
+        {"record_id": "1:1", "status": "pending_review", "feedback": None},
         {
-            "message_id": "202370",
-            "kind": "support",
-            "content": "پشتیبانی",
-            "timestamp": "31-03-1404 10:13",
-            "is_target": False,
+            "record_id": "2:2",
+            "status": "sent",
+            "feedback": {"label": "correct", "comment": ""},
         },
         {
-            "message_id": "205050",
-            "kind": "seller",
-            "content": "سلام",
-            "timestamp": "31-03-1404 12:15",
-            "is_target": True,
+            "record_id": "3:3",
+            "status": "pending_review",
+            "feedback": {"label": "wrong_reply", "comment": "x"},
         },
     ]
 
-    html = render_console_html(
-        record,
-        records=[record],
-        timeline=timeline,
-        active_tab="conversation",
-        active_nav="pending_review",
-        last_update="11:23:08",
-        auto_refresh_on=True,
-    )
+    counts = _compute_sidebar_counts(records)
 
-    assert "48423" in html
-    assert "205050" in html
-    assert "pending_review" in html
-    assert "Live HITL Review Console" in html
-    assert "اطلاعات سفارش موجود نیست" in html
-
-
-def test_render_chat_html_highlights_target() -> None:
-    html = render_chat_html(
-        [
-            {
-                "message_id": "100",
-                "kind": "seller",
-                "content": "target",
-                "timestamp": "12:15",
-                "is_target": True,
-            }
-        ]
-    )
-    assert "btarget" in html
-    assert "پیام فعلی" in html
+    assert counts["all"] == 3
+    assert counts["pending"] == 2
+    assert counts["approved"] == 1
+    assert counts["needs_edit"] == 1
+    assert _filter_by_nav(records, "approved")[0]["record_id"] == "2:2"

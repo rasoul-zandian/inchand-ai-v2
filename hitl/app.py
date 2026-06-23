@@ -255,16 +255,20 @@ def build_timeline_messages(record: dict[str, Any]) -> list[dict[str, Any]]:
     return timeline
 
 
+def _record_feedback(record: dict[str, Any]) -> dict[str, Any]:
+    return record.get("feedback") or {}
+
+
 def _compute_sidebar_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     edit_labels = {"wrong_intent", "wrong_reply", "wrong_tool", "missing_tool"}
     return {
         "all": len(records),
         "pending": sum(1 for r in records if r.get("status") == "pending_review"),
         "approved": sum(
-            1 for r in records if r.get("feedback", {}).get("label") == "correct"
+            1 for r in records if _record_feedback(r).get("label") == "correct"
         ),
         "needs_edit": sum(
-            1 for r in records if r.get("feedback", {}).get("label") in edit_labels
+            1 for r in records if _record_feedback(r).get("label") in edit_labels
         ),
         "sent": sum(
             1
@@ -280,9 +284,9 @@ def _filter_by_nav(records: list[dict[str, Any]], nav: str) -> list[dict[str, An
     if nav == "pending":
         return [r for r in records if r.get("status") == "pending_review"]
     if nav == "approved":
-        return [r for r in records if r.get("feedback", {}).get("label") == "correct"]
+        return [r for r in records if _record_feedback(r).get("label") == "correct"]
     if nav == "needs_edit":
-        return [r for r in records if r.get("feedback", {}).get("label") in edit_labels]
+        return [r for r in records if _record_feedback(r).get("label") in edit_labels]
     if nav == "sent":
         return [r for r in records if r.get("status") in {"sent", "sent_both", "suggested"}]
     if nav == "rejected":
@@ -624,7 +628,8 @@ def _render_feedback(record: dict[str, Any]) -> None:
     record_id = str(record["record_id"])
     labels = [label for label, _ in _FEEDBACK_OPTIONS if label in FEEDBACK_LABELS]
     display = {label: text for label, text in _FEEDBACK_OPTIONS if label in FEEDBACK_LABELS}
-    current = record.get("feedback", {}).get("label", "")
+    feedback = _record_feedback(record)
+    current = feedback.get("label", "")
     selected = st.radio(
         "بازخورد اپراتور",
         options=labels,
@@ -634,7 +639,7 @@ def _render_feedback(record: dict[str, Any]) -> None:
     )
     comment = st.text_area(
         "توضیحات",
-        value=str(record.get("feedback", {}).get("comment", "")),
+        value=str(feedback.get("comment", "")),
         key=f"feedback_comment_{record_id}",
         placeholder="توضیحات اختیاری...",
     )
