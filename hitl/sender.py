@@ -9,6 +9,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
+from app.config import settings
+
 SEND_TIMEOUT_SECONDS = 10.0
 
 RequestFn = Callable[..., tuple[int, dict[str, Any]]]
@@ -36,10 +38,6 @@ def _create_message_url() -> str:
     return f"{base}{path}"
 
 
-def _auth_token() -> str:
-    return os.getenv("INCHAND_INTERNAL_TOKEN") or os.getenv("INCHAND_API_KEY_VALUE", "")
-
-
 def build_suggestion_content(record: dict[str, Any]) -> str:
     pipeline = record.get("pipeline", {})
     entities = pipeline.get("entities", {})
@@ -63,8 +61,7 @@ def _default_request(
     *,
     timeout: float = SEND_TIMEOUT_SECONDS,
 ) -> tuple[int, dict[str, Any]]:
-    token = _auth_token()
-    if not token:
+    if not settings.inchand_api_key_value:
         raise RuntimeError("missing_token")
 
     url = _create_message_url()
@@ -73,7 +70,7 @@ def _default_request(
         url,
         data=body,
         headers={
-            "Authorization": token,
+            settings.inchand_api_key_name: settings.inchand_api_key_value,
             "Content-Type": "application/json",
         },
         method="POST",

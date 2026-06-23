@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.integrations.inchand_poller_adapter import build_pipeline_request_from_inchand_message
-
-import app.config  # noqa: F401 — load .env for poller CLI
+from app.config import settings
 
 from hitl.jalali import to_jalali
 from hitl.state import (
@@ -70,13 +69,9 @@ def _pipeline_url() -> str:
     )
 
 
-def _auth_token() -> str:
-    return os.getenv("INCHAND_INTERNAL_TOKEN") or os.getenv("INCHAND_API_KEY_VALUE", "")
-
-
 def _fetch_configured() -> bool:
     base = os.getenv("INCHAND_API_BASE_URL", "")
-    return bool(_auth_token() and base.startswith("http"))
+    return bool(settings.inchand_api_key_value and base.startswith("http"))
 
 
 def _cursor_query(cursor_type: str, cursor_value: str | None) -> dict[str, str]:
@@ -132,7 +127,7 @@ def fetch_new_messages(
 
     request = urllib.request.Request(
         url,
-        headers={"Authorization": _auth_token()},
+        headers={settings.inchand_api_key_name: settings.inchand_api_key_value},
         method="GET",
     )
     try:

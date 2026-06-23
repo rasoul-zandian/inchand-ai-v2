@@ -56,7 +56,7 @@ def test_send_suggestion_success() -> None:
 
 
 def test_send_reply_missing_token() -> None:
-    with patch("hitl.sender._auth_token", return_value=""):
+    with patch("hitl.sender.settings.inchand_api_key_value", ""):
         result = send_reply(_record())
     assert result["success"] is False
     assert result["error"] == "missing_token"

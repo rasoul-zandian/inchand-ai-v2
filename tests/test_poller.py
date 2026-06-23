@@ -44,8 +44,9 @@ class _FakeResponse:
 
 def _configure_fetch_env(monkeypatch) -> None:
     monkeypatch.setenv("INCHAND_API_BASE_URL", "https://app.inchand.com")
-    monkeypatch.setenv("INCHAND_INTERNAL_TOKEN", "test-token")
     monkeypatch.setenv("INCHAND_MESSAGES_ENDPOINT", "/api/v1/internal/messages")
+    monkeypatch.setattr("hitl.poller.settings.inchand_api_key_name", "Authorization")
+    monkeypatch.setattr("hitl.poller.settings.inchand_api_key_value", "test-token")
 
 
 def test_process_messages_creates_pending_review_records(tmp_path, monkeypatch) -> None:
@@ -158,7 +159,8 @@ def test_fetch_new_messages_uses_messages_path_for_internal_base(
 ) -> None:
     monkeypatch.setenv("HITL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("INCHAND_API_BASE_URL", "https://app.inchand.com/api/v1/internal")
-    monkeypatch.setenv("INCHAND_INTERNAL_TOKEN", "test-token")
+    monkeypatch.setattr("hitl.poller.settings.inchand_api_key_name", "Authorization")
+    monkeypatch.setattr("hitl.poller.settings.inchand_api_key_value", "test-token")
     monkeypatch.delenv("INCHAND_MESSAGES_ENDPOINT", raising=False)
     captured: dict[str, str] = {}
 
@@ -177,8 +179,7 @@ def test_fetch_new_messages_uses_messages_path_for_internal_base(
 def test_fetch_new_messages_auth_missing(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("HITL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("INCHAND_API_BASE_URL", "https://app.inchand.com")
-    monkeypatch.delenv("INCHAND_INTERNAL_TOKEN", raising=False)
-    monkeypatch.delenv("INCHAND_API_KEY_VALUE", raising=False)
+    monkeypatch.setattr("hitl.poller.settings.inchand_api_key_value", "")
 
     messages = fetch_new_messages()
     output = capsys.readouterr().out
