@@ -68,3 +68,41 @@ def test_classify_timeline_kind_maps_sender_and_role() -> None:
     assert _classify_timeline_kind({"sender": "admin"}) == "support"
     assert _classify_timeline_kind({"role": "user"}) == "seller"
     assert _classify_timeline_kind({"role": "assistant"}) == "support"
+
+
+def test_build_timeline_messages_prefers_timeline_messages_field() -> None:
+    record = {
+        "record_id": "48423:202375",
+        "target_message_id": "202375",
+        "seller_message": "ignored",
+        "timeline_messages": [
+            {
+                "id": 202370,
+                "sender": "admin",
+                "role": "assistant",
+                "content": "پشتیبانی",
+                "created_at": "2026-06-20T05:49:39Z",
+                "created_at_jalali": "30-03-1405 09:19",
+                "is_target": False,
+            },
+            {
+                "id": 202375,
+                "sender": "shop",
+                "role": "user",
+                "content": "متن پیام",
+                "created_at": "2026-06-20T05:50:12Z",
+                "created_at_jalali": "30-03-1405 09:20",
+                "is_target": True,
+            },
+        ],
+        "conversation_context": [],
+        "pipeline": {"final_reply": "پاسخ AI"},
+    }
+
+    messages = build_timeline_messages(record)
+
+    assert len(messages) == 3
+    assert messages[0]["kind"] == "support"
+    assert messages[1]["kind"] == "seller"
+    assert messages[1]["is_target"] is True
+    assert messages[2]["kind"] == "ai"

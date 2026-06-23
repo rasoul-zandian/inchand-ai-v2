@@ -167,42 +167,62 @@ def _format_timeline_timestamp(value: str | None) -> str:
 
 def build_timeline_messages(record: dict[str, Any]) -> list[dict[str, Any]]:
     target_id = str(record.get("target_message_id", ""))
-    timeline: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-
-    for index, item in enumerate(record.get("conversation_context", [])):
-        message_id = item.get("id")
-        item_id = str(message_id) if message_id is not None else f"context-{index}"
-        kind = _classify_timeline_kind(item)
-        timeline.append(
-            {
-                "message_id": item_id,
-                "kind": kind,
-                "label": _TIMELINE_LABELS[kind],
-                "content": str(item.get("content", "")),
-                "timestamp": _item_timestamp(item),
-                "is_target": item_id == target_id,
-                "sort_key": (0, index),
-            }
-        )
-        seen_ids.add(item_id)
-
-    if target_id and target_id not in seen_ids:
-        timeline.append(
-            {
-                "message_id": target_id,
-                "kind": "seller",
-                "label": _TIMELINE_LABELS["seller"],
-                "content": str(record.get("seller_message", "")),
-                "timestamp": record.get("created_at"),
-                "is_target": True,
-                "sort_key": (1, int(target_id) if target_id.isdigit() else target_id),
-            }
-        )
+    stored = record.get("timeline_messages")
+    if isinstance(stored, list) and stored:
+        timeline: list[dict[str, Any]] = []
+        for index, item in enumerate(stored):
+            message_id = item.get("id")
+            item_id = str(message_id) if message_id is not None else f"timeline-{index}"
+            kind = _classify_timeline_kind(item)
+            timeline.append(
+                {
+                    "message_id": item_id,
+                    "kind": kind,
+                    "label": _TIMELINE_LABELS[kind],
+                    "content": str(item.get("content", "")),
+                    "timestamp": _item_timestamp(item),
+                    "is_target": bool(item.get("is_target"))
+                    or (target_id and item_id == target_id),
+                    "sort_key": (0, index),
+                }
+            )
     else:
-        for message in timeline:
-            if str(message["message_id"]) == target_id:
-                message["is_target"] = True
+        timeline = []
+        seen_ids: set[str] = set()
+
+        for index, item in enumerate(record.get("conversation_context", [])):
+            message_id = item.get("id")
+            item_id = str(message_id) if message_id is not None else f"context-{index}"
+            kind = _classify_timeline_kind(item)
+            timeline.append(
+                {
+                    "message_id": item_id,
+                    "kind": kind,
+                    "label": _TIMELINE_LABELS[kind],
+                    "content": str(item.get("content", "")),
+                    "timestamp": _item_timestamp(item),
+                    "is_target": item_id == target_id,
+                    "sort_key": (0, index),
+                }
+            )
+            seen_ids.add(item_id)
+
+        if target_id and target_id not in seen_ids:
+            timeline.append(
+                {
+                    "message_id": target_id,
+                    "kind": "seller",
+                    "label": _TIMELINE_LABELS["seller"],
+                    "content": str(record.get("seller_message", "")),
+                    "timestamp": record.get("created_at"),
+                    "is_target": True,
+                    "sort_key": (1, int(target_id) if target_id.isdigit() else target_id),
+                }
+            )
+        else:
+            for message in timeline:
+                if str(message["message_id"]) == target_id:
+                    message["is_target"] = True
 
     final_reply = str(record.get("pipeline", {}).get("final_reply", "")).strip()
     if final_reply:

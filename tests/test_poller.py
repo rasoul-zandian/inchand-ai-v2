@@ -6,8 +6,11 @@ from pathlib import Path
 import pytest
 
 from hitl.poller import (
+    _parse_room_response,
     _update_cursor,
+    build_timeline_messages_from_room,
     fetch_new_messages,
+    fetch_room,
     process_messages,
     run_poll_once,
 )
@@ -84,7 +87,11 @@ def test_process_messages_creates_pending_review_records(tmp_path, monkeypatch) 
             "warnings": [],
         }
 
-    result = process_messages(messages, pipeline_fn=fake_pipeline)
+    result = process_messages(
+        messages,
+        pipeline_fn=fake_pipeline,
+        room_fetch_fn=lambda _room_id: None,
+    )
     assert len(result["created"]) == 1
     assert result["created"][0]["status"] == "pending_review"
     assert result["created"][0]["target_message_id"] == "1001"
@@ -252,8 +259,156 @@ def test_run_poll_once_updates_cursor_for_non_shop_messages(
     summary = run_poll_once(
         fetch_fn=lambda _state: messages,
         pipeline_fn=fake_pipeline,
+        room_fetch_fn=lambda _room_id: None,
     )
 
     assert summary["cursor_value"] == "20"
     assert summary["ignored_sender_count"] == 1
     assert Path(tmp_path / "hitl_state.jsonl").exists()
+
+
+def _sample_room(**overrides) -> dict:
+    room = {
+        "id": 48423,
+        "shop_id": 7304,
+        "room_type": "support",
+        "messages": [
+            {
+                "id": 202370,
+                "sender": "admin",
+                "content": "پشتیبانی",
+                "created_at": "2026-06-20T05:49:39Z",
+            },
+            {
+                "id": 202375,
+                "sender": "shop",
+                "content": "متن پیام",
+                "created_at": "2026-06-20T05:50:12Z",
+            },
+            {
+                "id": 202380,
+                "sender": "shop",
+                "content": "future",
+                "created_at": "2026-06-20T05:51:00Z",
+            },
+        ],
+    }
+    room.update(overrides)
+    return room
+
+
+def test_parse_room_response_shapes() -> None:
+    room = _sample_room()
+    assert _parse_room_response(room, 48423)[0] == room
+    assert _parse_room_response({"data": room}, 48423)[0] == room
+    assert _parse_room_response([room], 48423)[0] == room
+    assert _parse_room_response({"data": [room]}, 48423)[0] == room
+    assert _parse_room_response({"rooms": [room]}, 48423)[0] == room
+
+
+def test_fetch_room_uses_settings_auth(tmp_path, monkeypatch) -> None:
+    _configure_fetch_env(monkeypatch)
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout=10):
+        captured["authorization"] = request.headers["Authorization"]
+        return _FakeResponse(200, json.dumps({"data": _sample_room()}))
+
+    monkeypatch.setattr("hitl.poller.urllib.request.urlopen", fake_urlopen)
+
+    room = fetch_room(48423)
+    assert room is not None
+    assert captured["authorization"] == "test-token"
+
+
+def test_hydrate_flow_uses_room_adapter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HITL_STATE_DIR", str(tmp_path))
+    captured: dict[str, object] = {}
+
+    def fake_pipeline(request):
+        captured["request"] = request
+        return {
+            "primary_intent": "general_inquiry",
+            "confidence": 0.5,
+            "final_reply": "reply",
+            "final_reply_source": "template",
+            "suggested_action": "reply_to_seller",
+            "entities": {},
+            "selected_tools": [],
+            "evidence": [],
+            "safe_tool_output": [],
+            "warnings": [],
+        }
+
+    result = process_messages(
+        [_shop_message()],
+        pipeline_fn=fake_pipeline,
+        room_fetch_fn=lambda _room_id: _sample_room(),
+    )
+    record = result["created"][0]
+    request = captured["request"]
+
+    assert request["seller_message"] == "متن پیام"
+    assert len(request["conversation_context"]) == 1
+    assert request["conversation_context"][0]["role"] == "assistant"
+    assert len(record["timeline_messages"]) == 2
+    assert record["timeline_messages"][-1]["is_target"] is True
+    assert record["timeline_messages"][-1]["id"] == 202375
+    assert "room_hydration_failed" not in record["warnings"]
+
+
+def test_timeline_excludes_future_messages_and_caps_at_100() -> None:
+    messages = [
+        {
+            "id": index,
+            "sender": "admin" if index % 2 == 0 else "shop",
+            "content": f"msg-{index}",
+            "created_at": f"2026-06-20T05:{index % 60:02d}:00Z",
+        }
+        for index in range(1, 105)
+    ]
+    messages.append(
+        {
+            "id": 999,
+            "sender": "shop",
+            "content": "target",
+            "created_at": "2026-06-20T06:00:00Z",
+        }
+    )
+    room = {"id": 1, "messages": messages}
+
+    timeline = build_timeline_messages_from_room(room, 999)
+
+    assert len(timeline) == 100
+    assert timeline[-1]["is_target"] is True
+    assert timeline[-1]["content"] == "target"
+    assert all(item["id"] != 999 or item["is_target"] for item in timeline)
+
+
+def test_room_fetch_failure_falls_back_with_warning(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HITL_STATE_DIR", str(tmp_path))
+
+    def fake_pipeline(_request):
+        return {
+            "primary_intent": "general_inquiry",
+            "confidence": 0.5,
+            "final_reply": "reply",
+            "final_reply_source": "template",
+            "suggested_action": "reply_to_seller",
+            "entities": {},
+            "selected_tools": [],
+            "evidence": [],
+            "safe_tool_output": [],
+            "warnings": [],
+        }
+
+    result = process_messages(
+        [_shop_message()],
+        pipeline_fn=fake_pipeline,
+        room_fetch_fn=lambda _room_id: None,
+    )
+    record = result["created"][0]
+
+    assert record["status"] == "pending_review"
+    assert "room_hydration_failed" in record["warnings"]
+    assert record["timeline_messages"] == []
