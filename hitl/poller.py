@@ -277,6 +277,35 @@ def _sender_to_role(sender: str) -> str:
     return "assistant"
 
 
+def _sort_room_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def sort_key(message: dict[str, Any]) -> tuple[str, int]:
+        created_at = message.get("created_at")
+        message_id = message.get("id")
+        numeric_id = int(message_id) if message_id is not None else 0
+        return (str(created_at or ""), numeric_id)
+
+    return sorted(
+        [message for message in messages if isinstance(message, dict)],
+        key=sort_key,
+    )
+
+
+def _extract_sender_display_name(message: dict[str, Any]) -> str | None:
+    for key in ("sender_display_name", "sender_name", "display_name", "name"):
+        value = message.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for nested_key in ("user", "admin", "sender_user", "created_by"):
+        nested = message.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in ("display_name", "name", "full_name"):
+            value = nested.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return None
+
+
 def build_timeline_messages_from_room(
     room: dict[str, Any],
     target_message_id: str | int,
@@ -288,16 +317,14 @@ def build_timeline_messages_from_room(
         return []
 
     target_id = str(target_message_id)
-    target_index = None
-    for index, message in enumerate(messages):
-        message_id = message.get("id")
-        if message_id is not None and str(message_id) == target_id:
-            target_index = index
-            break
-    if target_index is None:
+    ordered = _sort_room_messages(messages)
+    if not any(
+        message.get("id") is not None and str(message.get("id")) == target_id
+        for message in ordered
+    ):
         return []
 
-    selected = messages[: target_index + 1]
+    selected = ordered
     if len(selected) > max_messages:
         selected = selected[-max_messages:]
 
@@ -307,6 +334,7 @@ def build_timeline_messages_from_room(
         sender = str(message.get("sender", ""))
         created_at = message.get("created_at")
         created_at_text = str(created_at) if created_at is not None else None
+        display_name = _extract_sender_display_name(message)
         timeline.append(
             {
                 "id": message_id,
@@ -315,6 +343,7 @@ def build_timeline_messages_from_room(
                 "content": str(message.get("content", "")),
                 "created_at": created_at_text,
                 "created_at_jalali": to_jalali(created_at_text) if created_at_text else "",
+                "sender_display_name": display_name,
                 "is_target": message_id is not None and str(message_id) == target_id,
             }
         )

@@ -351,13 +351,14 @@ def test_hydrate_flow_uses_room_adapter(tmp_path, monkeypatch) -> None:
     assert request["seller_message"] == "متن پیام"
     assert len(request["conversation_context"]) == 1
     assert request["conversation_context"][0]["role"] == "assistant"
-    assert len(record["timeline_messages"]) == 2
-    assert record["timeline_messages"][-1]["is_target"] is True
-    assert record["timeline_messages"][-1]["id"] == 202375
+    assert len(record["timeline_messages"]) == 3
+    assert record["timeline_messages"][1]["is_target"] is True
+    assert record["timeline_messages"][1]["id"] == 202375
+    assert record["timeline_messages"][-1]["content"] == "future"
     assert "room_hydration_failed" not in record["warnings"]
 
 
-def test_timeline_excludes_future_messages_and_caps_at_100() -> None:
+def test_timeline_includes_all_room_messages_and_caps_at_100() -> None:
     messages = [
         {
             "id": index,
@@ -380,9 +381,43 @@ def test_timeline_excludes_future_messages_and_caps_at_100() -> None:
     timeline = build_timeline_messages_from_room(room, 999)
 
     assert len(timeline) == 100
-    assert timeline[-1]["is_target"] is True
+    assert any(item["is_target"] for item in timeline)
     assert timeline[-1]["content"] == "target"
-    assert all(item["id"] != 999 or item["is_target"] for item in timeline)
+    assert timeline[-1]["is_target"] is True
+
+
+def test_timeline_includes_messages_after_target_with_display_name() -> None:
+    room = {
+        "id": 49118,
+        "messages": [
+            {
+                "id": 205134,
+                "sender": "shop",
+                "content": "target",
+                "created_at": "2026-06-23 11:42:27",
+            },
+            {
+                "id": 205140,
+                "sender": "admin",
+                "content": "admin reply",
+                "created_at": "2026-06-23 12:03:22",
+                "sender_name": "نسرین",
+            },
+            {
+                "id": 205198,
+                "sender": "shop",
+                "content": "later shop",
+                "created_at": "2026-06-23 17:01:40",
+            },
+        ],
+    }
+
+    timeline = build_timeline_messages_from_room(room, 205134)
+
+    assert len(timeline) == 3
+    assert timeline[1]["content"] == "admin reply"
+    assert timeline[1]["sender_display_name"] == "نسرین"
+    assert timeline[0]["is_target"] is True
 
 
 def test_room_fetch_failure_falls_back_with_warning(tmp_path, monkeypatch) -> None:
