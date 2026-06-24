@@ -49,6 +49,19 @@ _FEEDBACK_BUTTONS = [
     ("ابزار اشتباه", "wrong_tool"),
     ("ابزار استفاده نشده", "missing_tool"),
 ]
+_INTENT_CORRECTION_OPTIONS = [
+    "delivery_confirmation",
+    "tracking_code_update",
+    "address_correction",
+    "product_approval_followup",
+    "product_change_request",
+    "settlement_inquiry",
+    "account_activation_request",
+    "cancellation_request",
+    "complaint_order_followup",
+    "general_inquiry",
+    "other",
+]
 _STATUS_LABELS = {
     "pending_review": "در انتظار بررسی",
     "send_attempted": "در حال ارسال",
@@ -922,16 +935,49 @@ def _render_send_preview_card(record: dict[str, Any]) -> None:
 
 
 def _save_feedback(record_id: str, label: str, comment: str) -> None:
-    update_record(
-        record_id,
+    current = get_record(record_id)
+    feedback = dict((current or {}).get("feedback") or {})
+    feedback.update(
         {
-            "feedback": {
-                "label": label,
-                "comment": comment,
-                "created_at_jalali": to_jalali(),
-            }
-        },
+            "label": label,
+            "comment": comment,
+            "created_at_jalali": to_jalali(),
+        }
     )
+    update_record(record_id, {"feedback": feedback})
+
+
+def merge_intent_feedback(
+    existing_feedback: dict[str, Any] | None,
+    *,
+    intent_correct: bool,
+    correct_intent: str | None = None,
+) -> dict[str, Any]:
+    feedback = dict(existing_feedback or {})
+    feedback["intent_correct"] = intent_correct
+    if intent_correct:
+        feedback.pop("correct_intent", None)
+    else:
+        if not correct_intent:
+            raise ValueError("missing_correct_intent")
+        feedback["correct_intent"] = correct_intent
+    feedback["intent_feedback_at_jalali"] = to_jalali()
+    return feedback
+
+
+def _save_intent_feedback(
+    record_id: str,
+    *,
+    intent_correct: bool,
+    correct_intent: str | None = None,
+) -> None:
+    current = get_record(record_id)
+    feedback = merge_intent_feedback(
+        (current or {}).get("feedback"),
+        intent_correct=intent_correct,
+        correct_intent=correct_intent,
+    )
+    update_record(record_id, {"feedback": feedback})
 
 
 def _handle_send(
@@ -1064,6 +1110,64 @@ def _render_sidebar_metrics(metrics: dict[str, Any]) -> None:
     st.sidebar.toggle("بروزرسانی خودکار (۱۰ ثانیه)", value=True, key="auto_refresh_toggle")
 
 
+def _render_intent_feedback(record: dict[str, Any]) -> None:
+    record_id = str(record["record_id"])
+    predicted_intent = _pipeline_field(record, "primary_intent", "—")
+    existing = record.get("feedback") or {}
+    show_wrong_ui = st.session_state.get(f"intent_wrong_{record_id}", False)
+
+    st.markdown("#### Intent Feedback")
+    st.markdown(f"**Current Intent:** `{predicted_intent}`")
+
+    if existing.get("intent_correct") is True:
+        st.caption("✓ Intent marked correct")
+    elif existing.get("intent_correct") is False:
+        st.caption(f"✗ Correct intent: `{existing.get('correct_intent', '—')}`")
+
+    ok_col, wrong_col = st.columns(2)
+    with ok_col:
+        if st.button(
+            "✓ Intent Correct",
+            key=f"intent_ok_{record_id}",
+            use_container_width=True,
+        ):
+            _save_intent_feedback(record_id, intent_correct=True)
+            st.session_state.pop(f"intent_wrong_{record_id}", None)
+            _cached_records.clear()
+            st.rerun()
+    with wrong_col:
+        if st.button(
+            "✗ Intent Wrong",
+            key=f"intent_wrong_btn_{record_id}",
+            use_container_width=True,
+        ):
+            st.session_state[f"intent_wrong_{record_id}"] = True
+            st.rerun()
+
+    if show_wrong_ui or existing.get("intent_correct") is False:
+        current_correct = existing.get("correct_intent")
+        default_index = (
+            _INTENT_CORRECTION_OPTIONS.index(current_correct)
+            if current_correct in _INTENT_CORRECTION_OPTIONS
+            else 0
+        )
+        selected = st.selectbox(
+            "Correct intent",
+            _INTENT_CORRECTION_OPTIONS,
+            index=default_index,
+            key=f"correct_intent_{record_id}",
+        )
+        if st.button("Save intent correction", key=f"save_intent_{record_id}"):
+            _save_intent_feedback(
+                record_id,
+                intent_correct=False,
+                correct_intent=selected,
+            )
+            st.session_state.pop(f"intent_wrong_{record_id}", None)
+            _cached_records.clear()
+            st.rerun()
+
+
 def _render_feedback(record: dict[str, Any]) -> None:
     record_id = str(record["record_id"])
     existing = record.get("feedback") or {}
@@ -1102,6 +1206,8 @@ def _render_detail(record: dict[str, Any]) -> None:
 
     with st.expander("جزئیات فنی"):
         st.json(pipeline.get("entities", {}))
+
+    _render_intent_feedback(record)
 
     if status == "pending_review":
         _render_feedback(record)
