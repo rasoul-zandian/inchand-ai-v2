@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import urllib.error
@@ -41,6 +40,8 @@ _TOOL_LABELS_FA = {
     "product_lookup": "جستجوی محصول",
     "shop_lookup": "جستجوی فروشگاه",
 }
+
+_SECTION_RULE = "━━━━━━━━━━━━━━"
 
 
 def _log(message: str) -> None:
@@ -229,16 +230,16 @@ def _order_summary_lines(outputs: list[dict[str, Any]]) -> list[str]:
         order_id = str(item.get("order_id", "")).strip()
         if not order_id:
             continue
-        lines.append(f"سفارش: {order_id}")
+        lines.append(f"• شماره سفارش: {order_id}")
         order_status = str(item.get("order_status", "")).strip()
         if order_status:
-            lines.append(f"وضعیت سفارش: {order_status}")
+            lines.append(f"• وضعیت سفارش: {order_status}")
         parcel_status = str(item.get("parcel_status", "")).strip()
         if parcel_status:
-            lines.append(f"وضعیت مرسوله: {parcel_status}")
+            lines.append(f"• وضعیت مرسوله: {parcel_status}")
         tracking_code = str(item.get("tracking_code", "")).strip()
         if tracking_code:
-            lines.append(f"کد رهگیری: {tracking_code}")
+            lines.append(f"• کد رهگیری: {tracking_code}")
     return lines
 
 
@@ -295,109 +296,70 @@ def build_admin_suggestion_content(record: dict[str, Any]) -> str:
     intent_label = _persian_intent_label(pipeline.get("primary_intent"))
     action_label = _persian_action_label(pipeline.get("suggested_action"))
     confidence = _format_confidence_percent(pipeline.get("confidence"))
-    needs_review = _yes_no_persian(pipeline.get("needs_human_review"))
-    seller_summary = html.escape(
-        _truncate_text(str(record.get("seller_message", "") or "—"))
-    )
-    final_reply = html.escape(
-        _truncate_text(str(pipeline.get("final_reply", "") or "—"), limit=320)
-    )
+    seller_summary = _truncate_text(str(record.get("seller_message", "") or "—"))
+    final_reply = _truncate_text(str(pipeline.get("final_reply", "") or "—"), limit=320)
     tool_lines = _tool_summary_lines(record)
     order_lines = _order_summary_lines(_record_tool_output(record))
     warnings = _record_warnings(record)
-    next_action = html.escape(_recommended_next_action(record))
-    record_id = html.escape(str(record.get("record_id", "—")))
-    room_id = html.escape(str(record.get("room_id", "—")))
-    target_message_id = html.escape(str(record.get("target_message_id", "—")))
-    reply_source = html.escape(str(pipeline.get("final_reply_source", "—")))
+    next_action = _recommended_next_action(record)
+    record_id = str(record.get("record_id", "—"))
+    reply_source = str(pipeline.get("final_reply_source", "—"))
 
-    badges = (
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:999px;'
-        f'background:#ede9fe;color:#5b21b6;font-size:12px;font-weight:600;">'
-        f'{html.escape(intent_label)}</span>'
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:999px;'
-        f'background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:600;">'
-        f'{html.escape(action_label)}</span>'
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:999px;'
-        f'background:#e0f2fe;color:#075985;font-size:12px;font-weight:600;">'
-        f'اطمینان {confidence}</span>'
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:999px;'
-        f'background:#fef3c7;color:#92400e;font-size:12px;font-weight:600;">'
-        f'بررسی انسانی: {needs_review}</span>'
-    )
+    lines = [
+        "🤖 پیشنهاد هوش مصنوعی",
+        "",
+        f"موضوع: {intent_label}",
+        "",
+        f"اقدام پیشنهادی: {action_label}",
+        "",
+        f"سطح اطمینان: {confidence}",
+        "",
+        _SECTION_RULE,
+        "",
+    ]
 
-    tools_block = ""
     if tool_lines:
-        tool_items = "".join(
-            f'<div style="margin-top:4px;">{html.escape(line)}</div>'
-            for line in tool_lines
-        )
-        tools_block = (
-            '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;'
-            'background:#ecfdf5;border:1px solid #86efac;">'
-            '<div style="font-weight:600;color:#166534;margin-bottom:4px;">ابزارهای استفاده‌شده</div>'
-            f"{tool_items}"
-            "</div>"
-        )
+        lines.extend(["ابزارهای استفاده‌شده", ""] + tool_lines)
+    else:
+        lines.append("ابزارهای استفاده‌شده: ندارد")
+    lines.extend(["", _SECTION_RULE, ""])
 
-    order_block = ""
     if order_lines:
-        order_items = "".join(
-            f'<div style="margin-top:4px;">{html.escape(line)}</div>'
-            for line in order_lines
-        )
-        order_block = (
-            '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;'
-            'background:#f8fafc;border:1px solid #e2e8f0;">'
-            '<div style="font-weight:600;color:#334155;margin-bottom:4px;">خلاصه سفارش / مرسوله</div>'
-            f"{order_items}"
-            "</div>"
-        )
+        lines.extend(["اطلاعات سفارش", ""] + order_lines)
+        lines.extend(["", _SECTION_RULE, ""])
 
-    warnings_block = ""
-    if warnings:
-        warning_items = "".join(
-            f'<div style="margin-top:4px;">• {html.escape(item)}</div>'
-            for item in warnings
-        )
-        warnings_block = (
-            '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;'
-            'background:#fffbeb;border:1px solid #fcd34d;">'
-            '<div style="font-weight:600;color:#92400e;margin-bottom:4px;">هشدارها</div>'
-            f"{warning_items}"
-            "</div>"
-        )
-
-    return (
-        '<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;border:1px solid #dbeafe;'
-        'border-radius:12px;padding:12px;background:#f8fbff;color:#1f2937;line-height:1.8;">'
-        '<div style="font-weight:700;color:#1d4ed8;margin-bottom:8px;">'
-        "🤖 پیشنهاد هوش مصنوعی برای ادمین"
-        "</div>"
-        f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">{badges}</div>'
-        '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#ffffff;'
-        'border:1px solid #e5e7eb;">'
-        '<div style="font-weight:600;color:#374151;margin-bottom:4px;">خلاصه درخواست فروشنده</div>'
-        f'<div style="font-size:13px;">{seller_summary}</div>'
-        "</div>"
-        '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#ffffff;'
-        'border:1px solid #e5e7eb;">'
-        '<div style="font-weight:600;color:#374151;margin-bottom:4px;">پیش‌نمایش پاسخ AI</div>'
-        f'<div style="font-size:13px;">{final_reply}</div>'
-        "</div>"
-        f"{tools_block}{order_block}{warnings_block}"
-        '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#eff6ff;'
-        'border:1px solid #bfdbfe;">'
-        '<div style="font-weight:600;color:#1d4ed8;margin-bottom:4px;">اقدام بعدی پیشنهادی</div>'
-        f'<div style="font-size:13px;">{next_action}</div>'
-        "</div>"
-        '<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#f3f4f6;'
-        'border:1px solid #d1d5db;font-size:11px;color:#6b7280;">'
-        f"record: {record_id} | room: {room_id} | message: {target_message_id} | "
-        f"source: {reply_source}"
-        "</div>"
-        "</div>"
+    lines.extend(
+        [
+            "پیشنهاد سیستم",
+            "",
+            seller_summary,
+            "",
+            final_reply,
+            "",
+            next_action,
+            "",
+            _SECTION_RULE,
+            "",
+            "هشدارها",
+            "",
+        ]
     )
+    if warnings:
+        lines.extend(warnings)
+    else:
+        lines.append("ندارد")
+    lines.extend(
+        [
+            "",
+            _SECTION_RULE,
+            "",
+            "---",
+            "AI Commerce OS",
+            f"record: {record_id}",
+            f"source: {reply_source}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _default_request(

@@ -85,6 +85,8 @@ def test_send_suggestion_success() -> None:
     assert result["success"] is True
     assert captured["payload"]["type"] == 3
     assert "AI intent=" not in captured["payload"]["content"]
+    assert "<div" not in captured["payload"]["content"]
+    assert "style=" not in captured["payload"]["content"]
     assert captured["payload"]["meta"]["message_kind"] == "ai_admin_suggestion"
 
 
@@ -92,13 +94,27 @@ def test_build_admin_suggestion_content_persian_card() -> None:
     content = build_admin_suggestion_content(_record())
 
     assert "AI intent=" not in content
-    assert "🤖 پیشنهاد هوش مصنوعی برای ادمین" in content
+    assert "<div" not in content
+    assert "style=" not in content
+    assert "🤖 پیشنهاد هوش مصنوعی" in content
     assert "پیگیری ارسال / مرسوله" in content
     assert "قابل پاسخ به فروشنده" in content
     assert "ابزارهای استفاده‌شده" in content
     assert "✓ جستجوی سفارش" in content
-    assert "سفارش: INC-7342409" in content
-    assert "<script" not in content
+    assert "• شماره سفارش: INC-7342409" in content
+    assert "سلام، وضعیت سفارش INC-7342409 را لطفاً بررسی کنید." in content
+    assert "پاسخ نهایی" in content
+    assert "پیشنهاد سیستم" in content
+
+
+def test_build_admin_suggestion_content_empty_tools() -> None:
+    record = _record()
+    record["pipeline"] = {**record["pipeline"], "selected_tools": []}
+
+    content = build_admin_suggestion_content(record)
+
+    assert "ابزارهای استفاده‌شده: ندارد" in content
+    assert "<div" not in content
 
 
 def test_build_admin_suggestion_content_shows_warnings() -> None:
@@ -111,6 +127,14 @@ def test_build_admin_suggestion_content_shows_warnings() -> None:
     assert "هشدارها" in content
     assert "missing_tracking_code" in content
     assert "tool_timeout" in content
+    assert "<div" not in content
+
+
+def test_build_admin_suggestion_content_empty_warnings() -> None:
+    content = build_admin_suggestion_content(_record())
+
+    warnings_section = content.split("هشدارها", 1)[1]
+    assert "ندارد" in warnings_section
 
 
 def test_build_admin_suggestion_meta_fields() -> None:
