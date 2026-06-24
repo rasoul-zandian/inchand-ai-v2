@@ -27,9 +27,11 @@ from hitl.state import (
     exists_message,
     hitl_state_path,
     load_poller_state,
+    load_records,
     poller_lock_exists,
     poller_state_path,
     release_poller_lock,
+    rewrite_records,
     save_poller_state,
     state_dir,
 )
@@ -101,25 +103,66 @@ def _parse_messages_response(payload: Any) -> list[dict[str, Any]] | None:
     return None
 
 
-def _log_fetch_error(category: str, detail: str = "") -> None:
-    if detail:
-        _log(f"fetch error: {category} ({detail})")
-    else:
-        _log(f"fetch error: {category}")
+def _cursor_message_id(cursor_value: Any) -> int | None:
+    if cursor_value is None:
+        return None
+    text = str(cursor_value).strip()
+    if not text or not text.isdigit():
+        return None
+    return int(text)
 
 
-def fetch_new_messages(
-    poller_state: dict[str, Any] | None = None,
+def filter_messages_after_cursor(
+    messages: list[dict[str, Any]],
+    cursor_value: Any,
+) -> tuple[list[dict[str, Any]], int, int]:
+    cursor_id = _cursor_message_id(cursor_value)
+    if cursor_id is None:
+        return messages, len(messages), 0
+
+    new_messages: list[dict[str, Any]] = []
+    old_count = 0
+    for message in messages:
+        message_id = message.get("id")
+        if message_id is None:
+            continue
+        try:
+            numeric_id = int(message_id)
+        except (TypeError, ValueError):
+            continue
+        if numeric_id > cursor_id:
+            new_messages.append(message)
+        else:
+            old_count += 1
+    return new_messages, len(new_messages), old_count
+
+
+def _log_client_side_cursor_filter(
+    raw_messages: list[dict[str, Any]],
+    cursor_value: Any,
+) -> tuple[list[dict[str, Any]], int, int]:
+    filtered, new_count, old_count = filter_messages_after_cursor(
+        raw_messages,
+        cursor_value,
+    )
+    _log(f"fetched count: {len(raw_messages)}")
+    _log(f"cursor_value: {cursor_value}")
+    _log(f"client-side new message count: {new_count}")
+    _log(f"filtered old message count: {old_count}")
+    return filtered, new_count, old_count
+
+
+def _fetch_messages_raw(
+    poller_state: dict[str, Any],
     *,
     fetch_fn: FetchFn | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    state = poller_state or load_poller_state()
-    cursor_type = str(state.get("cursor_type", "after_message_id"))
-    cursor_value = state.get("cursor_value")
+    cursor_type = str(poller_state.get("cursor_type", "after_message_id"))
+    cursor_value = poller_state.get("cursor_value")
 
     if fetch_fn is not None:
-        return fetch_fn(state)
+        return fetch_fn(poller_state)
 
     if not _fetch_configured():
         _log("fetch_new_messages not configured")
@@ -164,8 +207,26 @@ def fetch_new_messages(
         _log_fetch_error("unexpected_response_shape")
         return []
 
-    _log(f"fetched count: {len(messages)}")
     return messages
+
+
+def fetch_new_messages(
+    poller_state: dict[str, Any] | None = None,
+    *,
+    fetch_fn: FetchFn | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    state = poller_state or load_poller_state()
+    raw_messages = _fetch_messages_raw(state, fetch_fn=fetch_fn, limit=limit)
+    filtered, _, _ = _log_client_side_cursor_filter(raw_messages, state.get("cursor_value"))
+    return filtered
+
+
+def _log_fetch_error(category: str, detail: str = "") -> None:
+    if detail:
+        _log(f"fetch error: {category} ({detail})")
+    else:
+        _log(f"fetch error: {category}")
 
 
 def _rooms_endpoint() -> str:
@@ -189,6 +250,75 @@ def _rooms_url(room_id: str | int) -> str:
     return f"{base}{path}?{urllib.parse.urlencode({param: str(room_id)})}"
 
 
+def _room_id_matches(room: dict[str, Any], room_id_text: str) -> bool:
+    room_key = room.get("id")
+    return room_key is not None and str(room_key) == room_id_text
+
+
+def _room_dicts_from_list(items: list[Any]) -> list[dict[str, Any]]:
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _find_room_in_list(
+    rooms: list[dict[str, Any]],
+    room_id_text: str,
+) -> dict[str, Any] | None:
+    for room in rooms:
+        if _room_id_matches(room, room_id_text):
+            return room
+    return None
+
+
+def _room_ids_from_list(rooms: list[dict[str, Any]], *, limit: int = 10) -> list[str]:
+    ids: list[str] = []
+    for room in rooms:
+        room_key = room.get("id")
+        if room_key is None:
+            continue
+        ids.append(str(room_key))
+        if len(ids) >= limit:
+            break
+    return ids
+
+
+def _collect_room_ids_from_payload(payload: Any, *, limit: int = 10) -> list[str]:
+    if isinstance(payload, list):
+        return _room_ids_from_list(_room_dicts_from_list(payload), limit=limit)
+
+    if not isinstance(payload, dict):
+        return []
+
+    data = payload.get("data")
+    if isinstance(data, list):
+        return _room_ids_from_list(_room_dicts_from_list(data), limit=limit)
+    if isinstance(data, dict) and data.get("id") is not None:
+        return [str(data.get("id"))]
+
+    rooms_value = payload.get("rooms")
+    if isinstance(rooms_value, list):
+        return _room_ids_from_list(_room_dicts_from_list(rooms_value), limit=limit)
+
+    if payload.get("id") is not None:
+        return [str(payload.get("id"))]
+    return []
+
+
+def _log_unexpected_room_response(payload: Any, room_id: str | int) -> None:
+    _log(f"room fetch unexpected shape for room_id: {room_id}")
+    _log(f"payload type: {type(payload).__name__}")
+    if isinstance(payload, dict):
+        _log(f"payload keys: {sorted(payload.keys())}")
+    elif isinstance(payload, list):
+        _log(f"payload list length: {len(payload)}")
+        if payload:
+            first = payload[0]
+            if isinstance(first, dict):
+                _log(f"first item keys: {sorted(first.keys())}")
+    room_ids = _collect_room_ids_from_payload(payload)
+    if room_ids:
+        _log(f"room ids found: {room_ids}")
+
+
 def _parse_room_response(
     payload: Any,
     room_id: str | int,
@@ -198,26 +328,39 @@ def _parse_room_response(
     if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
         if payload.get("id") is None or str(payload.get("id")) == room_id_text:
             return payload, "room_object"
+        return None, "room_not_found_in_response"
 
     if isinstance(payload, dict):
         data = payload.get("data")
         if isinstance(data, dict) and isinstance(data.get("messages"), list):
             if data.get("id") is None or str(data.get("id")) == room_id_text:
                 return data, "data_object"
+            return None, "room_not_found_in_response"
+
         if isinstance(data, list):
-            for room in data:
-                if isinstance(room, dict) and str(room.get("id")) == room_id_text:
-                    return room, "data_list"
-        rooms = payload.get("rooms")
-        if isinstance(rooms, list):
-            for room in rooms:
-                if isinstance(room, dict) and str(room.get("id")) == room_id_text:
-                    return room, "rooms_list"
+            rooms = _room_dicts_from_list(data)
+            found = _find_room_in_list(rooms, room_id_text)
+            if found is not None:
+                shape = "laravel_paginated_list" if "meta" in payload or "links" in payload else "data_list"
+                return found, shape
+            if rooms or data == []:
+                return None, "room_not_found_in_response"
+
+        rooms_value = payload.get("rooms")
+        if isinstance(rooms_value, list):
+            rooms = _room_dicts_from_list(rooms_value)
+            found = _find_room_in_list(rooms, room_id_text)
+            if found is not None:
+                return found, "rooms_list"
+            if rooms or rooms_value == []:
+                return None, "room_not_found_in_response"
 
     if isinstance(payload, list):
-        for room in payload:
-            if isinstance(room, dict) and str(room.get("id")) == room_id_text:
-                return room, "list"
+        rooms = _room_dicts_from_list(payload)
+        found = _find_room_in_list(rooms, room_id_text)
+        if found is not None:
+            return found, "list"
+        return None, "room_not_found_in_response"
 
     return None, "unexpected_response_shape"
 
@@ -228,8 +371,12 @@ def fetch_room(room_id: str | int) -> dict[str, Any] | None:
 
     url = _rooms_url(room_id)
     path = urllib.parse.urlparse(url).path
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    room_param = os.getenv("INCHAND_ROOM_ID_PARAM", "room_id")
+    room_param_value = query.get(room_param, [str(room_id)])[0]
     _log(f"fetch room path: {path}")
     _log(f"room_id: {room_id}")
+    _log(f"room fetch query: {room_param}={room_param_value}")
 
     request = urllib.request.Request(
         url,
@@ -262,7 +409,11 @@ def fetch_room(room_id: str | int) -> dict[str, Any] | None:
     room, shape = _parse_room_response(payload, room_id)
     _log(f"room response shape: {shape}")
     if room is None:
-        _log_fetch_error("room_unexpected_response_shape")
+        if shape == "room_not_found_in_response":
+            _log_fetch_error("room_not_found_in_response")
+        else:
+            _log_unexpected_room_response(payload, room_id)
+            _log_fetch_error("room_unexpected_response_shape")
         return None
 
     messages = room.get("messages") or []
@@ -348,6 +499,43 @@ def build_timeline_messages_from_room(
             }
         )
     return timeline
+
+
+def update_room_timeline_for_existing_records(
+    room_id: str | int,
+    room: dict[str, Any],
+    *,
+    room_last_message_id: str | int | None = None,
+    state_path: Path | None = None,
+) -> int:
+    file_path = state_path or hitl_state_path()
+    records = load_records(file_path)
+    room_id_text = str(room_id)
+    synced_at = datetime.now(timezone.utc).isoformat()
+    updated = 0
+
+    for index, record in enumerate(records):
+        if str(record.get("room_id")) != room_id_text:
+            continue
+        target_id = record.get("target_message_id")
+        if target_id is None:
+            continue
+        timeline_messages = build_timeline_messages_from_room(room, target_id)
+        if not timeline_messages:
+            continue
+        records[index] = {
+            **record,
+            "timeline_messages": timeline_messages,
+            "room_last_message_id": (
+                str(room_last_message_id) if room_last_message_id is not None else None
+            ),
+            "room_last_synced_at": synced_at,
+        }
+        updated += 1
+
+    if updated:
+        rewrite_records(records, file_path)
+    return updated
 
 
 def _flat_message_context(message: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -596,16 +784,35 @@ def process_messages(
     seller_count = 0
     duplicate_count = 0
     error_count = 0
-    ignored_sender_count = 0
+    non_shop_count = 0
+    timeline_sync_count = 0
+    pipeline_call_count = 0
+    fetcher = room_fetch_fn or fetch_room
 
-    for message in messages:
+    ordered_messages = sorted(
+        [message for message in messages if message.get("id") is not None],
+        key=lambda message: _message_id_sort_key(message["id"]),
+    )
+
+    for message in ordered_messages:
         sender = str(message.get("sender", ""))
+        message_id = message.get("id")
+        room_id = message.get("room_id")
+
+        if room_id is not None:
+            room = fetcher(room_id)
+            if room is not None:
+                timeline_sync_count += update_room_timeline_for_existing_records(
+                    room_id,
+                    room,
+                    room_last_message_id=message_id,
+                )
+
         if sender != _SHOP_SENDER:
-            ignored_sender_count += 1
+            non_shop_count += 1
             continue
 
         seller_count += 1
-        message_id = message.get("id")
         if message_id is None:
             error_count += 1
             _log("process error: missing_message_id")
@@ -623,6 +830,7 @@ def process_messages(
 
         try:
             pipeline_response = call_pipeline(pipeline_request, pipeline_fn=pipeline_fn)
+            pipeline_call_count += 1
         except (ValueError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             error_count += 1
             _log(f"process error: {_pipeline_error_category(exc)}")
@@ -663,7 +871,10 @@ def process_messages(
         "seller_count": seller_count,
         "duplicate_count": duplicate_count,
         "error_count": error_count,
-        "ignored_sender_count": ignored_sender_count,
+        "non_shop_count": non_shop_count,
+        "ignored_sender_count": non_shop_count,
+        "timeline_sync_count": timeline_sync_count,
+        "pipeline_call_count": pipeline_call_count,
         "processed_count": len(created),
     }
 
@@ -686,8 +897,12 @@ def _print_poll_summary(summary: dict[str, Any]) -> None:
 
     _log("poll started")
     _log(f"fetched message count: {summary.get('fetched', 0)}")
+    _log(f"cursor_value: {summary.get('cursor_before')}")
+    _log(f"client-side new message count: {summary.get('client_side_new_count', 0)}")
+    _log(f"filtered old message count: {summary.get('filtered_old_count', 0)}")
     _log(f"seller message count: {summary.get('seller_count', 0)}")
     _log(f"ignored sender count: {summary.get('ignored_sender_count', 0)}")
+    _log(f"timeline sync count: {summary.get('timeline_sync_count', 0)}")
     _log(f"skipped duplicate count: {summary.get('duplicate_count', 0)}")
     _log(f"processed count: {summary.get('processed_count', 0)}")
     _log(f"error count: {summary.get('error_count', 0)}")
@@ -711,22 +926,29 @@ def run_poll_once(
     try:
         poller_state = load_poller_state()
         cursor_before = poller_state.get("cursor_value")
-        messages = fetch_new_messages(poller_state, fetch_fn=fetch_fn)
+        raw_messages = _fetch_messages_raw(poller_state, fetch_fn=fetch_fn)
+        messages_to_process, client_side_new_count, filtered_old_count = (
+            _log_client_side_cursor_filter(raw_messages, cursor_before)
+        )
         result = process_messages(
-            messages,
+            messages_to_process,
             pipeline_fn=pipeline_fn,
             room_fetch_fn=room_fetch_fn,
         )
-        updated_state = _update_cursor(poller_state, messages)
+        updated_state = _update_cursor(poller_state, raw_messages)
         save_poller_state(updated_state)
         return {
             "skipped": False,
-            "fetched": len(messages),
+            "fetched": len(raw_messages),
+            "client_side_new_count": client_side_new_count,
+            "filtered_old_count": filtered_old_count,
             "created": len(result["created"]),
             "seller_count": result["seller_count"],
             "duplicate_count": result["duplicate_count"],
             "error_count": result["error_count"],
             "ignored_sender_count": result["ignored_sender_count"],
+            "timeline_sync_count": result["timeline_sync_count"],
+            "pipeline_call_count": result["pipeline_call_count"],
             "processed_count": result["processed_count"],
             "cursor_before": cursor_before,
             "cursor_value": updated_state.get("cursor_value"),
