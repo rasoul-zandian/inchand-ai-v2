@@ -22,17 +22,35 @@ _INTENT_LABELS_FA = {
     "shipping_inquiry": "پیگیری ارسال / مرسوله",
     "bank_account_change": "تغییر اطلاعات بانکی",
     "settlement_inquiry": "پیگیری تسویه",
-    "product_approval_request": "بررسی تایید محصول",
+    "product_approval_request": "بررسی تأیید محصول",
     "product_rejection_inquiry": "پیگیری رد محصول",
+    "product_edit_request": "اصلاح اطلاعات محصول",
     "general_inquiry": "درخواست عمومی",
 }
 
 _ACTION_LABELS_FA = {
-    "human_followup": "نیازمند بررسی کارشناس",
-    "reply_to_seller": "قابل پاسخ به فروشنده",
-    "request_missing_information": "نیاز به دریافت اطلاعات بیشتر",
+    "reply_to_seller": "پاسخ به فروشنده",
+    "human_followup": "بررسی توسط کارشناس",
+    "request_missing_information": "درخواست اطلاعات تکمیلی",
     "escalate": "ارجاع فوری",
 }
+
+_WARNING_LABELS_FA = {
+    "tracking_carrier_missing": "شرکت حمل برای رهگیری مشخص نیست",
+    "missing_order_id_for_delivery_confirmation": (
+        "شماره سفارش برای ثبت تحویل ارسال نشده است"
+    ),
+    "room_hydration_failed": "سابقه کامل گفتگو دریافت نشد",
+}
+
+_META_EVIDENCE_DATA_DENYLIST = frozenset(
+    {
+        "payment_status",
+        "request_url_base",
+        "response_shape_summary",
+        "providers_summary",
+    }
+)
 
 _TOOL_LABELS_FA = {
     "order_lookup": "جستجوی سفارش",
@@ -177,6 +195,115 @@ def _record_warnings(record: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _record_evidence_items(record: dict[str, Any]) -> list[dict[str, Any]]:
+    pipeline = record.get("pipeline", {})
+    items = pipeline.get("evidence_items")
+    if not isinstance(items, list):
+        evidence = pipeline.get("evidence")
+        if isinstance(evidence, dict):
+            nested = evidence.get("items")
+            if isinstance(nested, list):
+                items = nested
+    if not isinstance(items, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary", "")).strip()
+        if not summary:
+            continue
+        normalized.append(item)
+    return normalized
+
+
+def _persian_warning_label(warning: str) -> str:
+    if warning in _WARNING_LABELS_FA:
+        return _WARNING_LABELS_FA[warning]
+    if warning.startswith("unsupported_tracking_carrier:"):
+        return "ابزار رهگیری برای این شرکت حمل فعال نیست"
+    if warning.startswith("tracking_code_missing_for_carrier:"):
+        return "کد رهگیری برای شرکت حمل موجود نیست"
+    return warning
+
+
+def _warning_content_lines(record: dict[str, Any]) -> list[str]:
+    warnings = _record_warnings(record)
+    if not warnings:
+        return ["ندارد"]
+    return [_persian_warning_label(item) for item in warnings]
+
+
+def _safe_evidence_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in _META_EVIDENCE_DATA_DENYLIST or value is None:
+            continue
+        if isinstance(value, (str, bool, int, float)):
+            safe[key] = value
+    return safe
+
+
+def _meta_evidence_items(record: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in _record_evidence_items(record):
+        confidence = item.get("confidence", 1.0)
+        try:
+            confidence_value = float(confidence)
+        except (TypeError, ValueError):
+            confidence_value = 1.0
+        source_tool = item.get("source_tool")
+        items.append(
+            {
+                "type": str(item.get("evidence_type", "")).strip(),
+                "source_tool": str(source_tool).strip() if source_tool else None,
+                "summary": str(item.get("summary", "")).strip(),
+                "confidence": confidence_value,
+                "data": _safe_evidence_data(item.get("data")),
+            }
+        )
+    return items
+
+
+def _tools_meta(record: dict[str, Any]) -> dict[str, list[str]]:
+    pipeline = record.get("pipeline", {})
+    selected = [str(tool) for tool in (pipeline.get("selected_tools") or [])]
+    tool_status = pipeline.get("tool_status")
+    if not isinstance(tool_status, dict):
+        tool_status = {}
+
+    succeeded: list[str] = []
+    failed: list[str] = []
+    for item in _meta_evidence_items(record):
+        source_tool = item.get("source_tool")
+        if not source_tool:
+            continue
+        name = str(source_tool)
+        if item.get("type") == "tool_failure":
+            if name not in failed:
+                failed.append(name)
+        elif name not in succeeded:
+            succeeded.append(name)
+
+    if tool_status.get("order_lookup_executed"):
+        if tool_status.get("order_lookup_success") is True:
+            if "order_lookup" not in succeeded:
+                succeeded.append("order_lookup")
+        elif "order_lookup" not in failed:
+            failed.append("order_lookup")
+
+    executed = list(dict.fromkeys([*succeeded, *failed]))
+    return {
+        "selected": selected,
+        "executed": executed,
+        "succeeded": succeeded,
+        "failed": failed,
+    }
+
+
 def _record_tool_output(record: dict[str, Any]) -> list[dict[str, Any]]:
     output = record.get("tool_output")
     if isinstance(output, list):
@@ -259,9 +386,21 @@ def _tracking_summary_lines(outputs: list[dict[str, Any]]) -> list[str]:
 def _recommended_next_action(record: dict[str, Any]) -> str:
     action = str(_pipeline_field(record, "suggested_action", "")).strip()
     needs_review = _pipeline_field(record, "needs_human_review")
+    evidence_items = _meta_evidence_items(record)
+    delivered = any(
+        item.get("type") == "tracking_status"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("delivered") is True
+        for item in evidence_items
+    )
     if needs_review is True or action == "human_followup":
         return "این مورد نیازمند بررسی کارشناس است؛ لطفاً پیش از ارسال پاسخ نهایی، جزئیات را تأیید کنید."
     if action == "reply_to_seller":
+        if delivered:
+            return (
+                "شواهد رهگیری تحویل مرسوله را تأیید می‌کند؛ "
+                "در صورت صحت، پاسخ پیشنهادی را برای فروشنده ارسال کنید."
+            )
         return "پاسخ پیشنهادی AI قابل بررسی است؛ در صورت تأیید می‌توانید برای فروشنده ارسال کنید."
     if action == "request_missing_information":
         return "ابتدا اطلاعات تکمیلی از فروشنده دریافت شود و سپس پاسخ نهایی ثبت گردد."
@@ -272,26 +411,37 @@ def _recommended_next_action(record: dict[str, Any]) -> str:
 
 def build_admin_suggestion_meta(record: dict[str, Any]) -> dict[str, Any]:
     pipeline = record.get("pipeline", {})
+    intent_id = str(pipeline.get("primary_intent", "")).strip()
+    action_id = str(pipeline.get("suggested_action", "")).strip()
     return {
+        "schema": "admin_suggestion.v1",
         "source": "inchand_ai_v2",
         "mode": "live_hitl",
         "message_kind": "ai_admin_suggestion",
         "record_id": record.get("record_id"),
         "room_id": record.get("room_id"),
+        "shop_id": record.get("shop_id"),
         "target_message_id": record.get("target_message_id"),
-        "primary_intent": pipeline.get("primary_intent"),
-        "confidence": pipeline.get("confidence"),
-        "suggested_action": pipeline.get("suggested_action"),
-        "needs_human_review": pipeline.get("needs_human_review"),
-        "should_send": pipeline.get("should_send"),
+        "intent": {
+            "id": intent_id,
+            "label_fa": _persian_intent_label(intent_id),
+            "confidence": pipeline.get("confidence"),
+        },
+        "recommended_action": {
+            "id": action_id,
+            "label_fa": _persian_action_label(action_id),
+            "should_send": pipeline.get("should_send"),
+            "needs_human_review": pipeline.get("needs_human_review"),
+        },
         "entities": pipeline.get("entities", {}),
-        "selected_tools": list(pipeline.get("selected_tools") or []),
-        "warnings": _record_warnings(record),
-        "final_reply_source": pipeline.get("final_reply_source"),
+        "evidence": _meta_evidence_items(record),
+        "tools": _tools_meta(record),
+        "warnings": [_persian_warning_label(item) for item in _record_warnings(record)],
+        "reply_preview": _truncate_text(str(pipeline.get("final_reply", "") or ""), limit=320),
     }
 
 
-def build_admin_suggestion_content(record: dict[str, Any]) -> str:
+def _build_legacy_admin_suggestion_content(record: dict[str, Any]) -> str:
     pipeline = record.get("pipeline", {})
     intent_label = _persian_intent_label(pipeline.get("primary_intent"))
     action_label = _persian_action_label(pipeline.get("suggested_action"))
@@ -360,6 +510,53 @@ def build_admin_suggestion_content(record: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _build_evidence_first_admin_suggestion_content(record: dict[str, Any]) -> str:
+    pipeline = record.get("pipeline", {})
+    intent_label = _persian_intent_label(pipeline.get("primary_intent"))
+    action_label = _persian_action_label(pipeline.get("suggested_action"))
+    confidence = _format_confidence_percent(pipeline.get("confidence"))
+    next_action = _recommended_next_action(record)
+    evidence_summaries = [
+        f"✓ {str(item.get('summary', '')).strip()}"
+        for item in _record_evidence_items(record)
+    ]
+
+    lines = [
+        "🤖 پیشنهاد هوش مصنوعی",
+        "",
+        f"موضوع: {intent_label}",
+        "",
+        f"اقدام پیشنهادی: {action_label}",
+        "",
+        f"سطح اطمینان: {confidence}",
+        "",
+        _SECTION_RULE,
+        "",
+        "شواهد بررسی‌شده",
+        "",
+        *evidence_summaries,
+        "",
+        _SECTION_RULE,
+        "",
+        "پیشنهاد سیستم",
+        "",
+        next_action,
+        "",
+        _SECTION_RULE,
+        "",
+        "هشدارها",
+        "",
+        *_warning_content_lines(record),
+    ]
+    return "\n".join(lines)
+
+
+def build_admin_suggestion_content(record: dict[str, Any]) -> str:
+    if _record_evidence_items(record):
+        return _build_evidence_first_admin_suggestion_content(record)
+    return _build_legacy_admin_suggestion_content(record)
 
 
 def _default_request(
