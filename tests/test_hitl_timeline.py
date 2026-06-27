@@ -1,4 +1,6 @@
 from hitl.app import (
+    build_evidence_html,
+    build_evidence_views,
     build_queue_dataframe,
     build_send_preview,
     build_timeline_messages,
@@ -274,3 +276,70 @@ def test_build_tool_views_selected_but_not_executed() -> None:
     product_view = next(view for view in views if view["name"] == "product_lookup")
     assert product_view["icon"] == "✗"
     assert product_view["status"] == "not_executed"
+
+
+def test_build_evidence_views_renders_summaries_and_labels() -> None:
+    record = {
+        "pipeline": {
+            "evidence_items": [
+                {
+                    "evidence_type": "order_status",
+                    "source_tool": "order_lookup",
+                    "confidence": 1.0,
+                    "summary": "وضعیت سفارش INC-7332625: تحویل شده",
+                    "data": {"order_id": "INC-7332625", "order_status": "تحویل شده"},
+                },
+                {
+                    "evidence_type": "tracking_status",
+                    "source_tool": "mahex_tracking",
+                    "confidence": 0.85,
+                    "summary": "وضعیت مرسوله ماهکس: تحویل مرسوله به گیرنده",
+                    "data": {"tracking_code": "10118730244480"},
+                },
+            ]
+        }
+    }
+
+    views = build_evidence_views(record)
+
+    assert len(views) == 2
+    assert views[0]["summary"] == "وضعیت سفارش INC-7332625: تحویل شده"
+    assert views[0]["source_tool"] == "order_lookup"
+    assert views[0]["type_label"] == "وضعیت سفارش"
+    assert views[0]["confidence_text"] is None
+    assert views[1]["type_label"] == "رهگیری مرسوله"
+    assert views[1]["confidence_text"] == "85%"
+
+
+def test_build_evidence_html_shows_empty_state() -> None:
+    html = build_evidence_html({"pipeline": {}})
+
+    assert "شواهدی ثبت نشده است." in html
+
+
+def test_build_evidence_html_excludes_raw_data_payload() -> None:
+    record = {
+        "pipeline": {
+            "evidence_items": [
+                {
+                    "evidence_type": "shipment_status",
+                    "source_tool": "order_lookup",
+                    "confidence": 1.0,
+                    "summary": "وضعیت مرسوله: تحویل مشتری",
+                    "data": {
+                        "tracking_code": "596760509400015050005114",
+                        "response_shape_summary": "dict:data[...]",
+                    },
+                }
+            ]
+        }
+    }
+
+    html = build_evidence_html(record)
+
+    assert "وضعیت مرسوله: تحویل مشتری" in html
+    assert "order_lookup" in html
+    assert "596760509400015050005114" not in html
+    assert "response_shape_summary" not in html
+    assert '"data"' not in html
+

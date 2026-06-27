@@ -42,6 +42,14 @@ _TOOL_DISPLAY = {
     "product_lookup": "product_lookup",
     "shop_lookup": "shop_lookup",
 }
+_EVIDENCE_TYPE_LABELS = {
+    "order_status": "وضعیت سفارش",
+    "shipment_status": "وضعیت مرسوله",
+    "tracking_status": "رهگیری مرسوله",
+    "tool_failure": "خطای ابزار",
+    "unsupported_carrier": "شرکت حمل پشتیبانی‌نشده",
+    "missing_required_entity": "اطلاعات ناقص",
+}
 _FEEDBACK_BUTTONS = [
     ("صحیح", "correct"),
     ("اشتباه در قصد", "wrong_intent"),
@@ -284,6 +292,105 @@ def _record_warnings(record: dict[str, Any]) -> list[str]:
                 if text and text not in warnings:
                     warnings.append(text)
     return warnings
+
+
+def _record_evidence_items(record: dict[str, Any]) -> list[dict[str, Any]]:
+    pipeline = record.get("pipeline", {})
+    items = pipeline.get("evidence_items")
+    if not isinstance(items, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary", "")).strip()
+        if not summary:
+            continue
+        source_tool = str(item.get("source_tool", "")).strip() or None
+        evidence_type = str(item.get("evidence_type", "")).strip()
+        normalized.append(
+            {
+                "evidence_type": evidence_type,
+                "source_tool": source_tool,
+                "confidence": item.get("confidence", 1.0),
+                "summary": summary,
+            }
+        )
+    return normalized
+
+
+def _evidence_type_label(evidence_type: str) -> str:
+    if not evidence_type:
+        return ""
+    return _EVIDENCE_TYPE_LABELS.get(evidence_type, evidence_type.replace("_", " "))
+
+
+def _evidence_confidence_text(confidence: Any) -> str | None:
+    try:
+        value = float(confidence)
+    except (TypeError, ValueError):
+        return None
+    if abs(value - 1.0) < 0.0001:
+        return None
+    return f"{value:.0%}"
+
+
+def build_evidence_views(record: dict[str, Any]) -> list[dict[str, Any]]:
+    views: list[dict[str, Any]] = []
+    for item in _record_evidence_items(record):
+        evidence_type = item["evidence_type"]
+        views.append(
+            {
+                "summary": item["summary"],
+                "source_tool": item["source_tool"],
+                "evidence_type": evidence_type,
+                "type_label": _evidence_type_label(evidence_type),
+                "confidence_text": _evidence_confidence_text(item.get("confidence", 1.0)),
+            }
+        )
+    return views
+
+
+def build_evidence_html(record: dict[str, Any]) -> str:
+    views = build_evidence_views(record)
+    if not views:
+        return '<div class="evidence-empty">شواهدی ثبت نشده است.</div>'
+
+    rows: list[str] = []
+    for view in views:
+        meta_parts: list[str] = []
+        if view.get("source_tool"):
+            meta_parts.append(
+                f'<span class="evidence-chip tool">{html.escape(view["source_tool"])}</span>'
+            )
+        type_label = view.get("type_label", "")
+        if type_label:
+            meta_parts.append(
+                f'<span class="evidence-chip type">{html.escape(type_label)}</span>'
+            )
+        confidence_text = view.get("confidence_text")
+        if confidence_text:
+            meta_parts.append(
+                f'<span class="evidence-chip conf">{html.escape(confidence_text)}</span>'
+            )
+        meta_html = ""
+        if meta_parts:
+            meta_html = (
+                '<div class="evidence-meta">'
+                + '<span class="evidence-sep">·</span>'.join(meta_parts)
+                + "</div>"
+            )
+        rows.append(
+            f'<div class="evidence-row">'
+            f'<span class="evidence-icon">✓</span>'
+            f'<div class="evidence-body">'
+            f'<div class="evidence-summary">{html.escape(view["summary"])}</div>'
+            f"{meta_html}"
+            f"</div></div>"
+        )
+
+    return f'<div class="evidence-card">{"".join(rows)}</div>'
 
 
 def _order_lookup_summary_lines(outputs: list[dict[str, Any]]) -> list[str]:
@@ -826,6 +933,43 @@ def _render_tools_section(record: dict[str, Any]) -> None:
     )
 
 
+def _render_evidence_section(record: dict[str, Any]) -> None:
+    st.markdown("#### شواهد بررسی‌شده")
+    st.markdown(
+        f"""
+        {build_evidence_html(record)}
+        <style>
+        .evidence-card {{
+          border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff;
+        }}
+        .evidence-empty {{
+          color:#6b7280;font-size:13px;
+        }}
+        .evidence-row {{
+          display:flex;gap:8px;align-items:flex-start;padding:6px 0;
+          border-top:1px solid #f1f5f9;font-size:13px;
+        }}
+        .evidence-row:first-child {{ border-top:none;padding-top:0; }}
+        .evidence-icon {{ color:#16a34a;font-weight:700;min-width:14px; }}
+        .evidence-summary {{ color:#111827;line-height:1.5; }}
+        .evidence-meta {{
+          margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;
+          font-size:11px;color:#6b7280;
+        }}
+        .evidence-chip {{
+          display:inline-block;padding:1px 7px;border-radius:999px;
+          font-size:11px;font-weight:600;
+        }}
+        .evidence-chip.tool {{ background:#eef2ff;color:#3730a3; }}
+        .evidence-chip.type {{ background:#f3f4f6;color:#374151; }}
+        .evidence-chip.conf {{ background:#e0f2fe;color:#075985; }}
+        .evidence-sep {{ color:#9ca3af;padding:0 2px; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_ai_reply_card(record: dict[str, Any]) -> None:
     pipeline = record.get("pipeline", {})
     final_reply = html.escape(str(pipeline.get("final_reply", ""))).replace("\n", "<br>")
@@ -1203,6 +1347,7 @@ def _render_detail(record: dict[str, Any]) -> None:
     _render_ai_reply_card(record)
     _render_send_preview_card(record)
     _render_tools_section(record)
+    _render_evidence_section(record)
 
     with st.expander("جزئیات فنی"):
         st.json(pipeline.get("entities", {}))
