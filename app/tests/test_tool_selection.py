@@ -1,6 +1,12 @@
 from app.intent.taxonomy import IntentId
 from app.models.intent import IntentClassificationResult, SuggestedAction
-from app.tools.selection import ORDER_LOOKUP, IRAN_POST_TRACKING, PRODUCT_LOOKUP, select_tools
+from app.tools.selection import (
+    IRAN_POST_TRACKING,
+    MAHEX_TRACKING,
+    ORDER_LOOKUP,
+    PRODUCT_LOOKUP,
+    select_tools,
+)
 
 
 def _intent(intent_id: IntentId, **entities: str | list[str]) -> IntentClassificationResult:
@@ -17,6 +23,28 @@ def test_order_inquiry_with_order_id_selects_order_lookup() -> None:
 
     assert result.selected_tools == [ORDER_LOOKUP]
     assert not result.requires_human_followup
+
+
+def test_shipping_with_mahex_tracking_code_selects_mahex_tracking() -> None:
+    result = select_tools(
+        _intent(IntentId.SHIPPING_INQUIRY, tracking_code="10118730244480")
+    )
+
+    assert result.selected_tools == [MAHEX_TRACKING]
+    assert IRAN_POST_TRACKING not in result.selected_tools
+    assert not result.requires_human_followup
+
+
+def test_shipping_with_iran_post_tracking_code_selects_iran_post() -> None:
+    result = select_tools(
+        _intent(
+            IntentId.SHIPPING_INQUIRY,
+            tracking_code="596760509400015050005114",
+        )
+    )
+
+    assert result.selected_tools == [IRAN_POST_TRACKING]
+    assert MAHEX_TRACKING not in result.selected_tools
 
 
 def test_shipping_with_tracking_code_selects_iran_post_tracking() -> None:

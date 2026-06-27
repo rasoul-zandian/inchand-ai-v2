@@ -16,6 +16,7 @@ from app.reply.evaluation import evaluate_reply
 from app.reply.generator import generate_reply
 from app.reply.revision import revise_reply
 from app.reply.templates import DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY
+from app.tools.mahex_tracking import run_selected_mahex_tracking
 from app.tools.selection import _has_order_entity, select_tools
 
 LookupFn = Callable[[ToolRequest], ToolResult]
@@ -124,10 +125,15 @@ def run_pipeline(
         context=_tool_context(seller_message, conversation_context, shop_id=shop_id),
         lookup_fn=lookup_fn,
     )
+    tracking_result = run_selected_mahex_tracking(
+        tool_selection_result,
+        intent_result,
+    )
     final_reply = enrich_reply_with_order_lookup(
         current_reply,
         intent_result,
         order_lookup_result,
+        tracking_result=tracking_result,
     )
     if delivery_warnings:
         final_reply = final_reply.model_copy(

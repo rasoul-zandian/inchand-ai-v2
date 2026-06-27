@@ -5,8 +5,11 @@ from app.models.intent import IntentClassificationResult
 from app.models.messages import ConversationMessage
 from app.models.tool import ToolSelectionResult
 
+from app.tools.mahex_tracking import is_iran_post_tracking_code, is_mahex_tracking_code
+
 ORDER_LOOKUP = "order_lookup"
 IRAN_POST_TRACKING = "iran_post_tracking"
+MAHEX_TRACKING = "mahex_tracking"
 PRODUCT_LOOKUP = "product_lookup"
 SHOP_LOOKUP = "shop_lookup"
 
@@ -91,8 +94,18 @@ def select_tools(
 
     elif intent == IntentId.SHIPPING_INQUIRY:
         if tracking_code:
-            selected.append(IRAN_POST_TRACKING)
-            reason = "tracking_code present for shipping inquiry"
+            if is_mahex_tracking_code(tracking_code):
+                selected.append(MAHEX_TRACKING)
+                skipped.append(_skip(IRAN_POST_TRACKING, "mahex_code_pattern"))
+                reason = "mahex tracking_code present for shipping inquiry"
+            elif is_iran_post_tracking_code(tracking_code):
+                selected.append(IRAN_POST_TRACKING)
+                skipped.append(_skip(MAHEX_TRACKING, "iran_post_code_pattern"))
+                reason = "iran post tracking_code present for shipping inquiry"
+            else:
+                selected.append(IRAN_POST_TRACKING)
+                skipped.append(_skip(MAHEX_TRACKING, "unknown_carrier_pattern"))
+                reason = "tracking_code present for shipping inquiry"
         elif order_id:
             selected.append(ORDER_LOOKUP)
             reason = "order_id present; tracking_code missing"

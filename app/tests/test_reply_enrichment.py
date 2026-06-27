@@ -5,6 +5,7 @@ from app.models.reply import ReplyGenerationResult
 from app.models.tool_contracts import ToolResult
 from app.reply.enrichment import enrich_reply_with_order_lookup
 from app.reply.templates import COMPLAINT_FOLLOWUP_REPLY, DEFAULT_REGISTERED_REPLY, DELIVERY_CONFIRMATION_REPLY
+from app.tools.mahex_tracking import MAHEX_TRACKING_TOOL
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
 
 
@@ -343,3 +344,69 @@ def test_multi_order_status_inquiry_enrichment() -> None:
 
     assert "وضعیت سفارش INC-7338176: ارسال شده." in result.text
     assert "وضعیت سفارش INC-7337206: ارسال شده." in result.text
+
+
+def test_mahex_tracking_enrichment_includes_status_for_shipping() -> None:
+    tracking = ToolResult(
+        tool_name=MAHEX_TRACKING_TOOL,
+        success=True,
+        data={
+            "tracking_code": "10118730244480",
+            "carrier": "mahex",
+            "found": "true",
+            "current_state_name": "تحویل شد",
+            "status_text": "تحویل مرسوله به گیرنده",
+            "delivered": "true",
+            "http_status": "200",
+        },
+        summary="تحویل مرسوله به گیرنده",
+    )
+
+    result = enrich_reply_with_order_lookup(
+        ReplyGenerationResult(
+            text=DEFAULT_REGISTERED_REPLY,
+            primary_intent=IntentId.SHIPPING_INQUIRY,
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        IntentClassificationResult(
+            primary_intent=IntentId.SHIPPING_INQUIRY,
+            confidence=0.9,
+            entities={"tracking_code": "10118730244480"},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        OrderLookupExecutionResult(executed=False, tool_result=None),
+        tracking_result=tracking,
+    )
+
+    assert "وضعیت مرسوله ماهکس: تحویل مرسوله به گیرنده." in result.text
+    assert "مرسوله طبق اطلاعات ماهکس تحویل شده است." in result.text
+
+
+def test_mahex_tracking_failure_adds_warning_without_crashing() -> None:
+    tracking = ToolResult(
+        tool_name=MAHEX_TRACKING_TOOL,
+        success=False,
+        data={
+            "tracking_code": "10118730244480",
+            "carrier": "mahex",
+            "found": "false",
+            "http_status": "404",
+        },
+        summary="",
+        error="mahex_tracking_not_found",
+    )
+
+    result = enrich_reply_with_order_lookup(
+        _reply(IntentId.SHIPPING_INQUIRY),
+        IntentClassificationResult(
+            primary_intent=IntentId.SHIPPING_INQUIRY,
+            confidence=0.9,
+            entities={"tracking_code": "10118730244480"},
+            suggested_action=SuggestedAction.REPLY_TO_SELLER,
+        ),
+        OrderLookupExecutionResult(executed=False, tool_result=None),
+        tracking_result=tracking,
+    )
+
+    assert result.text == DEFAULT_REGISTERED_REPLY
+    assert "mahex_tracking_failed" in result.warnings
