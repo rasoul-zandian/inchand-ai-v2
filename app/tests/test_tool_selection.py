@@ -56,6 +56,17 @@ def test_complaint_followup_with_order_id_selects_order_lookup() -> None:
     assert not result.requires_human_followup
 
 
+def test_delivery_confirmation_without_order_id_skips_order_lookup() -> None:
+    result = select_tools(_intent(IntentId.DELIVERY_CONFIRMATION_REQUEST))
+
+    assert result.selected_tools == []
+    assert not result.requires_human_followup
+    assert any(
+        item["tool"] == ORDER_LOOKUP and item["reason"] == "order_id_missing"
+        for item in result.skipped_tools
+    )
+
+
 def test_delivery_confirmation_with_order_id_selects_order_lookup() -> None:
     result = select_tools(
         _intent(IntentId.DELIVERY_CONFIRMATION_REQUEST, order_id="INC-7338176")

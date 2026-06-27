@@ -3,6 +3,7 @@
 from typing import Callable
 
 from app.intent.classifier import classify_intent
+from app.intent.taxonomy import IntentId
 from app.models.intent import SuggestedAction
 from app.models.messages import ConversationMessage
 from app.models.pipeline import PipelineResult
@@ -14,13 +15,42 @@ from app.reply.enrichment import enrich_reply_with_order_lookup
 from app.reply.evaluation import evaluate_reply
 from app.reply.generator import generate_reply
 from app.reply.revision import revise_reply
-from app.tools.selection import select_tools
+from app.reply.templates import DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY
+from app.tools.selection import _has_order_entity, select_tools
 
 LookupFn = Callable[[ToolRequest], ToolResult]
 
 _HUMAN_REVIEW_ACKNOWLEDGEMENT = (
     "درخواست شما دریافت شد و جهت بررسی به کارشناسان مربوطه ارجاع شد."
 )
+_MISSING_ORDER_ID_FOR_DELIVERY_CONFIRMATION = (
+    "missing_order_id_for_delivery_confirmation"
+)
+
+
+def _apply_delivery_confirmation_missing_order_gate(
+    intent_result,
+    reply_result: ReplyGenerationResult,
+) -> tuple[object, ReplyGenerationResult, list[str]]:
+    if intent_result.primary_intent != IntentId.DELIVERY_CONFIRMATION_REQUEST:
+        return intent_result, reply_result, []
+    if _has_order_entity(intent_result):
+        return intent_result, reply_result, []
+
+    updated_intent = intent_result.model_copy(
+        update={"suggested_action": SuggestedAction.REQUEST_MISSING_INFORMATION}
+    )
+    updated_reply = reply_result.model_copy(
+        update={
+            "text": DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY,
+            "suggested_action": SuggestedAction.REQUEST_MISSING_INFORMATION,
+        }
+    )
+    return (
+        updated_intent,
+        updated_reply,
+        [_MISSING_ORDER_ID_FOR_DELIVERY_CONFIRMATION],
+    )
 
 
 def _apply_send_gate(
@@ -82,6 +112,9 @@ def run_pipeline(
         current_reply = reply_result.model_copy(update={"text": revision_result.revised_text})
 
     tool_selection_result = select_tools(intent_result, conversation_context=conversation_context)
+    intent_result, current_reply, delivery_warnings = (
+        _apply_delivery_confirmation_missing_order_gate(intent_result, current_reply)
+    )
     shop_id = None
     if metadata and metadata.get("shop_id") is not None:
         shop_id = str(metadata["shop_id"])
@@ -96,6 +129,10 @@ def run_pipeline(
         intent_result,
         order_lookup_result,
     )
+    if delivery_warnings:
+        final_reply = final_reply.model_copy(
+            update={"warnings": list(final_reply.warnings) + delivery_warnings}
+        )
     final_reply, needs_human_review = _apply_send_gate(
         final_reply,
         intent_result.suggested_action,

@@ -7,6 +7,7 @@ from app.models.messages import ConversationMessage
 from app.models.pipeline import OrderLookupExecutionResult
 from app.models.tool_contracts import ToolRequest, ToolResult
 from app.pipeline.run_pipeline import run_pipeline
+from app.reply.templates import DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY
 from app.tools.order_lookup import ORDER_LOOKUP_TOOL
 from app.tools.selection import ORDER_LOOKUP
 
@@ -194,6 +195,37 @@ def test_delivered_order_final_reply(monkeypatch) -> None:
         result.final_reply.text
         == "وضعیت سفارش INC-7342409 در وضعیت تحویل شده قرار دارد."
     )
+
+
+def test_delivery_confirmation_without_order_id_asks_for_order_number(monkeypatch) -> None:
+    intent = IntentClassificationResult(
+        primary_intent=IntentId.DELIVERY_CONFIRMATION_REQUEST,
+        confidence=0.9,
+        entities={},
+        suggested_action=SuggestedAction.REPLY_TO_SELLER,
+    )
+    monkeypatch.setattr("app.pipeline.run_pipeline.classify_intent", lambda *_a, **_k: intent)
+
+    lookup_called = False
+
+    def fake_lookup(_request: ToolRequest) -> ToolResult:
+        nonlocal lookup_called
+        lookup_called = True
+        return ToolResult(tool_name=ORDER_LOOKUP_TOOL, success=True, data={}, summary="ok")
+
+    result = run_pipeline(
+        "سلام خسته نباشید من دوهفته پیش یه بسته ارسال کردم دست مشتری رسیده",
+        lookup_fn=fake_lookup,
+    )
+
+    assert result.intent_result.suggested_action == SuggestedAction.REQUEST_MISSING_INFORMATION
+    assert result.final_reply.text == DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY
+    assert result.final_reply.suggested_action == SuggestedAction.REQUEST_MISSING_INFORMATION
+    assert result.needs_human_review is False
+    assert ORDER_LOOKUP not in result.tool_selection_result.selected_tools
+    assert result.order_lookup_result.executed is False
+    assert lookup_called is False
+    assert "missing_order_id_for_delivery_confirmation" in result.final_reply.warnings
 
 
 def test_delivery_confirmation_pipeline_runs_order_lookup(monkeypatch) -> None:

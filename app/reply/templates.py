@@ -31,6 +31,9 @@ COMPLAINT_FOLLOWUP_REPLY = "درخواست شما ثبت و در دست بررس
 DELIVERY_CONFIRMATION_REPLY = (
     "اطلاع شما درباره تحویل سفارش ثبت شد و در دست بررسی قرار گرفت."
 )
+DELIVERY_CONFIRMATION_MISSING_ORDER_ID_REPLY = (
+    "سلام، لطفاً جهت پیگیری، شماره سفارش را ارسال بفرمایید."
+)
 GENERAL_INQUIRY_REPLY = (
     "لطفاً موضوع درخواست خود را دقیق‌تر توضیح دهید تا بررسی شود."
 )

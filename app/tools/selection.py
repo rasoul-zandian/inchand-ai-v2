@@ -117,6 +117,7 @@ def select_tools(
             selected.append(ORDER_LOOKUP)
             reason = "order_id present for delivery confirmation"
         else:
+            skipped.append(_skip(ORDER_LOOKUP, "order_id_missing"))
             reason = "no order_id for delivery confirmation"
 
     elif intent in _HUMAN_ONLY_INTENTS:
